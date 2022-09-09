@@ -476,7 +476,7 @@ fn try_unstake<S: Storage, A: Api, Q: Querier>(
     let constants = config.constants()?;
     if !constants.unstake_is_enabled {
         return Err(StdError::generic_err(
-            "Redeem functionality is not enabled for this token.",
+            "Unstake functionality is not enabled for this token.",
         ));
     }
 
@@ -529,6 +529,7 @@ fn try_unstake<S: Storage, A: Api, Q: Querier>(
     )?;
 
     let res = HandleResponse {
+        // Send tokens to the wallet
         messages: vec![CosmosMsg::Bank(BankMsg::Send {
             from_address: env.contract.address,
             to_address: env.message.sender,
@@ -1657,7 +1658,7 @@ mod tests {
         };
         let handle_result = handle(&mut deps_for_failure, mock_env("butler", &[]), handle_msg);
         let error = extract_error_msg(handle_result);
-        assert!(error.contains("Redeem functionality is not enabled for this token."));
+        assert!(error.contains("Unstake functionality is not enabled for this token."));
 
         // try to redeem when contract has 0 balance
         let handle_msg = HandleMsg::Unstake {

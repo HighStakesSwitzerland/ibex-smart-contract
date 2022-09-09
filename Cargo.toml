@@ -2,7 +2,7 @@
 name = "ibex-smart-contract"
 version = "1.0.0"
 authors = ["Joe <joe@highstakes.ch>"]
-edition = "2021"
+edition = "2018"
 exclude = [
   # Those files are rust-optimizer artifacts. You might want to commit them for convenience but they should not be part of the source code publication.
   "contract.wasm",
@@ -37,13 +37,13 @@ cosmwasm-storage = { version = "0.10", package = "secret-cosmwasm-storage" }
 secret-toolkit = { version = "0.3", features = ["permit"] }
 schemars = "0.7"
 serde = { version = "1.0.103", default-features = false, features = ["derive"] }
-snafu = { version = "0.6.3" }
+snafu = { version = "0.7.1" }
 bincode2 = "2.0.1"
 subtle = { version = "2.2.3", default-features = false }
-base64 = "0.12.3"
-rand_chacha = { version = "0.2.2", default-features = false }
-rand_core = { version = "0.5.1", default-features = false }
-sha2 = { version = "0.9.1", default-features = false }
+base64 = "0.13.0"
+rand_chacha = { version = "0.3.1", default-features = false }
+rand_core = { version = "0.6.3", default-features = false }
+sha2 = { version = "0.10.5", default-features = false }
 
 [dev-dependencies]
-cosmwasm-schema = { version = "0.9.2" }
+cosmwasm-schema = { version = "0.16.7" }

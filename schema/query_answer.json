@@ -121,41 +121,6 @@
     {
       "type": "object",
       "required": [
-        "allowance"
-      ],
-      "properties": {
-        "allowance": {
-          "type": "object",
-          "required": [
-            "allowance",
-            "owner",
-            "spender"
-          ],
-          "properties": {
-            "allowance": {
-              "$ref": "#/definitions/Uint128"
-            },
-            "expiration": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "uint64",
-              "minimum": 0.0
-            },
-            "owner": {
-              "$ref": "#/definitions/HumanAddr"
-            },
-            "spender": {
-              "$ref": "#/definitions/HumanAddr"
-            }
-          }
-        }
-      }
-    },
-    {
-      "type": "object",
-      "required": [
         "balance"
       ],
       "properties": {

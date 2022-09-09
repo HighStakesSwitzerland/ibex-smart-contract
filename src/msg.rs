@@ -7,12 +7,12 @@ use crate::batch;
 use crate::transaction_history::{RichTx, Tx};
 use crate::viewing_key::ViewingKey;
 use cosmwasm_std::{Binary, HumanAddr, StdError, StdResult, Uint128};
-use secret_toolkit::permit::Permit;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema)]
 pub struct InitialBalance {
     pub address: HumanAddr,
     pub amount: Uint128,
+    pub staked_amount: Uint128,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -50,9 +50,6 @@ pub struct InitConfig {
     /// Indicates whether mint functionality should be enabled
     /// default: False
     enable_mint: Option<bool>,
-    /// Indicates whether burn functionality should be enabled
-    /// default: False
-    enable_burn: Option<bool>,
 }
 
 impl InitConfig {
@@ -71,22 +68,18 @@ impl InitConfig {
     pub fn mint_enabled(&self) -> bool {
         self.enable_mint.unwrap_or(false)
     }
-
-    pub fn burn_enabled(&self) -> bool {
-        self.enable_burn.unwrap_or(false)
-    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum HandleMsg {
     // Native coin interactions
-    Redeem {
+    Unstake {
         amount: Uint128,
         denom: Option<String>,
         padding: Option<String>,
     },
-    Deposit {
+    Stake {
         padding: Option<String>,
     },
 
@@ -105,17 +98,8 @@ pub enum HandleMsg {
         memo: Option<String>,
         padding: Option<String>,
     },
-    BatchTransfer {
-        actions: Vec<batch::TransferAction>,
-        padding: Option<String>,
-    },
     BatchSend {
         actions: Vec<batch::SendAction>,
-        padding: Option<String>,
-    },
-    Burn {
-        amount: Uint128,
-        memo: Option<String>,
         padding: Option<String>,
     },
     RegisterReceive {
@@ -128,20 +112,6 @@ pub enum HandleMsg {
     },
     SetViewingKey {
         key: String,
-        padding: Option<String>,
-    },
-
-    // Allowance
-    IncreaseAllowance {
-        spender: HumanAddr,
-        amount: Uint128,
-        expiration: Option<u64>,
-        padding: Option<String>,
-    },
-    DecreaseAllowance {
-        spender: HumanAddr,
-        amount: Uint128,
-        expiration: Option<u64>,
         padding: Option<String>,
     },
     TransferFrom {
@@ -168,40 +138,6 @@ pub enum HandleMsg {
         actions: Vec<batch::SendFromAction>,
         padding: Option<String>,
     },
-    BurnFrom {
-        owner: HumanAddr,
-        amount: Uint128,
-        memo: Option<String>,
-        padding: Option<String>,
-    },
-    BatchBurnFrom {
-        actions: Vec<batch::BurnFromAction>,
-        padding: Option<String>,
-    },
-
-    // Mint
-    Mint {
-        recipient: HumanAddr,
-        amount: Uint128,
-        memo: Option<String>,
-        padding: Option<String>,
-    },
-    BatchMint {
-        actions: Vec<batch::MintAction>,
-        padding: Option<String>,
-    },
-    AddMinters {
-        minters: Vec<HumanAddr>,
-        padding: Option<String>,
-    },
-    RemoveMinters {
-        minters: Vec<HumanAddr>,
-        padding: Option<String>,
-    },
-    SetMinters {
-        minters: Vec<HumanAddr>,
-        padding: Option<String>,
-    },
 
     // Admin
     ChangeAdmin {
@@ -212,110 +148,30 @@ pub enum HandleMsg {
         level: ContractStatusLevel,
         padding: Option<String>,
     },
-
-    // Permit
-    RevokePermit {
-        permit_name: String,
-        padding: Option<String>,
-    },
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum HandleAnswer {
     // Native
-    Deposit {
-        status: ResponseStatus,
-    },
-    Redeem {
-        status: ResponseStatus,
-    },
+    Stake { status: ResponseStatus },
+    Unstake { status: ResponseStatus },
 
     // Base
-    Transfer {
-        status: ResponseStatus,
-    },
-    Send {
-        status: ResponseStatus,
-    },
-    BatchTransfer {
-        status: ResponseStatus,
-    },
-    BatchSend {
-        status: ResponseStatus,
-    },
-    Burn {
-        status: ResponseStatus,
-    },
-    RegisterReceive {
-        status: ResponseStatus,
-    },
-    CreateViewingKey {
-        key: ViewingKey,
-    },
-    SetViewingKey {
-        status: ResponseStatus,
-    },
-
-    // Allowance
-    IncreaseAllowance {
-        spender: HumanAddr,
-        owner: HumanAddr,
-        allowance: Uint128,
-    },
-    DecreaseAllowance {
-        spender: HumanAddr,
-        owner: HumanAddr,
-        allowance: Uint128,
-    },
-    TransferFrom {
-        status: ResponseStatus,
-    },
-    SendFrom {
-        status: ResponseStatus,
-    },
-    BatchTransferFrom {
-        status: ResponseStatus,
-    },
-    BatchSendFrom {
-        status: ResponseStatus,
-    },
-    BurnFrom {
-        status: ResponseStatus,
-    },
-    BatchBurnFrom {
-        status: ResponseStatus,
-    },
-
-    // Mint
-    Mint {
-        status: ResponseStatus,
-    },
-    BatchMint {
-        status: ResponseStatus,
-    },
-    AddMinters {
-        status: ResponseStatus,
-    },
-    RemoveMinters {
-        status: ResponseStatus,
-    },
-    SetMinters {
-        status: ResponseStatus,
-    },
+    Transfer { status: ResponseStatus },
+    Send { status: ResponseStatus },
+    BatchSend { status: ResponseStatus },
+    RegisterReceive { status: ResponseStatus },
+    CreateViewingKey { key: ViewingKey },
+    SetViewingKey { status: ResponseStatus },
+    TransferFrom { status: ResponseStatus },
+    SendFrom { status: ResponseStatus },
+    BatchTransferFrom { status: ResponseStatus },
+    BatchSendFrom { status: ResponseStatus },
 
     // Other
-    ChangeAdmin {
-        status: ResponseStatus,
-    },
-    SetContractStatus {
-        status: ResponseStatus,
-    },
-
-    // Permit
-    RevokePermit {
-        status: ResponseStatus,
-    },
+    ChangeAdmin { status: ResponseStatus },
+    SetContractStatus { status: ResponseStatus },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -324,12 +180,6 @@ pub enum QueryMsg {
     TokenInfo {},
     TokenConfig {},
     ContractStatus {},
-    ExchangeRate {},
-    Allowance {
-        owner: HumanAddr,
-        spender: HumanAddr,
-        key: String,
-    },
     Balance {
         address: HumanAddr,
         key: String,
@@ -346,11 +196,6 @@ pub enum QueryMsg {
         page: Option<u32>,
         page_size: u32,
     },
-    Minters {},
-    WithPermit {
-        permit: Permit,
-        query: QueryWithPermit,
-    },
 }
 
 impl QueryMsg {
@@ -361,33 +206,9 @@ impl QueryMsg {
             Self::TransactionHistory { address, key, .. } => {
                 (vec![address], ViewingKey(key.clone()))
             }
-            Self::Allowance {
-                owner,
-                spender,
-                key,
-                ..
-            } => (vec![owner, spender], ViewingKey(key.clone())),
             _ => panic!("This query type does not require authentication"),
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum QueryWithPermit {
-    Allowance {
-        owner: HumanAddr,
-        spender: HumanAddr,
-    },
-    Balance {},
-    TransferHistory {
-        page: Option<u32>,
-        page_size: u32,
-    },
-    TransactionHistory {
-        page: Option<u32>,
-        page_size: u32,
-    },
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug)]
@@ -401,26 +222,16 @@ pub enum QueryAnswer {
     },
     TokenConfig {
         public_total_supply: bool,
-        deposit_enabled: bool,
-        redeem_enabled: bool,
-        mint_enabled: bool,
-        burn_enabled: bool,
+        staking_enable: bool,
+        unstaking_enabled: bool,
     },
     ContractStatus {
         status: ContractStatusLevel,
     },
-    ExchangeRate {
-        rate: Uint128,
-        denom: String,
-    },
-    Allowance {
-        spender: HumanAddr,
-        owner: HumanAddr,
-        allowance: Uint128,
-        expiration: Option<u64>,
-    },
     Balance {
         amount: Uint128,
+        staked_amount: Uint128,
+
     },
     TransferHistory {
         txs: Vec<Tx>,
@@ -432,9 +243,6 @@ pub enum QueryAnswer {
     },
     ViewingKeyError {
         msg: String,
-    },
-    Minters {
-        minters: Vec<HumanAddr>,
     },
 }
 

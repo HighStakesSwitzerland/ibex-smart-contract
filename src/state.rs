@@ -4,8 +4,6 @@ use std::convert::TryFrom;
 use cosmwasm_std::{CanonicalAddr, HumanAddr, ReadonlyStorage, StdError, StdResult, Storage};
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
 
-use secret_toolkit::storage::{TypedStore, TypedStoreMut};
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -19,12 +17,11 @@ pub const PREFIX_TXS: &[u8] = b"transfers";
 pub const KEY_CONSTANTS: &[u8] = b"constants";
 pub const KEY_TOTAL_SUPPLY: &[u8] = b"total_supply";
 pub const KEY_CONTRACT_STATUS: &[u8] = b"contract_status";
-pub const KEY_MINTERS: &[u8] = b"minters";
 pub const KEY_TX_COUNT: &[u8] = b"tx-count";
 
 pub const PREFIX_CONFIG: &[u8] = b"config";
 pub const PREFIX_BALANCES: &[u8] = b"balances";
-pub const PREFIX_ALLOWANCES: &[u8] = b"allowances";
+pub const PREFIX_STAKED_BALANCES: &[u8] = b"staked_balances";
 pub const PREFIX_VIEW_KEY: &[u8] = b"viewingkey";
 pub const PREFIX_RECEIVERS: &[u8] = b"receivers";
 
@@ -40,13 +37,9 @@ pub struct Constants {
     // privacy configuration
     pub total_supply_is_public: bool,
     // is deposit enabled
-    pub deposit_is_enabled: bool,
+    pub stake_is_enabled: bool,
     // is redeem enabled
-    pub redeem_is_enabled: bool,
-    // is mint enabled
-    pub mint_is_enabled: bool,
-    // is burn enabled
-    pub burn_is_enabled: bool,
+    pub unstake_is_enabled: bool,
     // the address of this contract, used to validate query permits
     pub contract_address: HumanAddr,
 }
@@ -76,10 +69,6 @@ impl<'a, S: ReadonlyStorage> ReadonlyConfig<'a, S> {
 
     pub fn contract_status(&self) -> ContractStatusLevel {
         self.as_readonly().contract_status()
-    }
-
-    pub fn minters(&self) -> Vec<HumanAddr> {
-        self.as_readonly().minters()
     }
 
     pub fn tx_count(&self) -> u64 {
@@ -152,31 +141,6 @@ impl<'a, S: Storage> Config<'a, S> {
             .set(KEY_CONTRACT_STATUS, &status_u8.to_be_bytes());
     }
 
-    pub fn set_minters(&mut self, minters_to_set: Vec<HumanAddr>) -> StdResult<()> {
-        set_bin_data(&mut self.storage, KEY_MINTERS, &minters_to_set)
-    }
-
-    pub fn add_minters(&mut self, minters_to_add: Vec<HumanAddr>) -> StdResult<()> {
-        let mut minters = self.minters();
-        minters.extend(minters_to_add);
-
-        self.set_minters(minters)
-    }
-
-    pub fn remove_minters(&mut self, minters_to_remove: Vec<HumanAddr>) -> StdResult<()> {
-        let mut minters = self.minters();
-
-        for minter in minters_to_remove {
-            minters.retain(|x| x != &minter);
-        }
-
-        self.set_minters(minters)
-    }
-
-    pub fn minters(&mut self) -> Vec<HumanAddr> {
-        self.as_readonly().minters()
-    }
-
     pub fn tx_count(&self) -> u64 {
         self.as_readonly().tx_count()
     }
@@ -223,10 +187,6 @@ impl<'a, S: ReadonlyStorage> ReadonlyConfigImpl<'a, S> {
         u8_to_status_level(status).unwrap()
     }
 
-    fn minters(&self) -> Vec<HumanAddr> {
-        get_bin_data(self.0, KEY_MINTERS).unwrap()
-    }
-
     pub fn tx_count(&self) -> u64 {
         get_bin_data(self.0, KEY_TX_COUNT).unwrap_or_default()
     }
@@ -245,12 +205,32 @@ impl<'a, S: ReadonlyStorage> ReadonlyBalances<'a, S> {
         }
     }
 
-    fn as_readonly(&self) -> ReadonlyBalancesImpl<ReadonlyPrefixedStorage<S>> {
+    fn balance_as_readonly(&self) -> ReadonlyBalancesImpl<ReadonlyPrefixedStorage<S>> {
         ReadonlyBalancesImpl(&self.storage)
     }
 
     pub fn account_amount(&self, account: &CanonicalAddr) -> u128 {
-        self.as_readonly().account_amount(account)
+        self.balance_as_readonly().account_amount(account)
+    }
+}
+
+pub struct ReadonlyStakedBalances<'a, S: ReadonlyStorage> {
+    storage: ReadonlyPrefixedStorage<'a, S>,
+}
+
+impl<'a, S: ReadonlyStorage> ReadonlyStakedBalances<'a, S> {
+    pub fn from_storage(storage: &'a S) -> Self {
+        Self {
+            storage: ReadonlyPrefixedStorage::new(PREFIX_STAKED_BALANCES, storage),
+        }
+    }
+
+    fn balance_as_readonly(&self) -> ReadonlyBalancesImpl<ReadonlyPrefixedStorage<S>> {
+        ReadonlyBalancesImpl(&self.storage)
+    }
+
+    pub fn account_amount(&self, account: &CanonicalAddr) -> u128 {
+        self.balance_as_readonly().account_amount(account)
     }
 }
 
@@ -262,6 +242,30 @@ impl<'a, S: Storage> Balances<'a, S> {
     pub fn from_storage(storage: &'a mut S) -> Self {
         Self {
             storage: PrefixedStorage::new(PREFIX_BALANCES, storage),
+        }
+    }
+
+    fn as_readonly(&self) -> ReadonlyBalancesImpl<PrefixedStorage<S>> {
+        ReadonlyBalancesImpl(&self.storage)
+    }
+
+    pub fn balance(&self, account: &CanonicalAddr) -> u128 {
+        self.as_readonly().account_amount(account)
+    }
+
+    pub fn set_account_balance(&mut self, account: &CanonicalAddr, amount: u128) {
+        self.storage.set(account.as_slice(), &amount.to_be_bytes())
+    }
+}
+
+pub struct StakedBalances<'a, S: Storage> {
+    storage: PrefixedStorage<'a, S>,
+}
+
+impl<'a, S: Storage> StakedBalances<'a, S> {
+    pub fn from_storage(storage: &'a mut S) -> Self {
+        Self {
+            storage: PrefixedStorage::new(PREFIX_STAKED_BALANCES, storage),
         }
     }
 
@@ -295,48 +299,6 @@ impl<'a, S: ReadonlyStorage> ReadonlyBalancesImpl<'a, S> {
             None => 0,
         }
     }
-}
-
-// Allowances
-
-#[derive(Serialize, Debug, Deserialize, Clone, PartialEq, Default, JsonSchema)]
-pub struct Allowance {
-    pub amount: u128,
-    pub expiration: Option<u64>,
-}
-
-impl Allowance {
-    pub fn is_expired_at(&self, block: &cosmwasm_std::BlockInfo) -> bool {
-        match self.expiration {
-            Some(time) => block.time >= time,
-            None => false, // allowance has no expiration
-        }
-    }
-}
-
-pub fn read_allowance<S: Storage>(
-    store: &S,
-    owner: &CanonicalAddr,
-    spender: &CanonicalAddr,
-) -> StdResult<Allowance> {
-    let owner_store =
-        ReadonlyPrefixedStorage::multilevel(&[PREFIX_ALLOWANCES, owner.as_slice()], store);
-    let owner_store = TypedStore::attach(&owner_store);
-    let allowance = owner_store.may_load(spender.as_slice());
-    allowance.map(Option::unwrap_or_default)
-}
-
-pub fn write_allowance<S: Storage>(
-    store: &mut S,
-    owner: &CanonicalAddr,
-    spender: &CanonicalAddr,
-    allowance: Allowance,
-) -> StdResult<()> {
-    let mut owner_store =
-        PrefixedStorage::multilevel(&[PREFIX_ALLOWANCES, owner.as_slice()], store);
-    let mut owner_store = TypedStoreMut::attach(&mut owner_store);
-
-    owner_store.store(spender.as_slice(), &allowance)
 }
 
 // Viewing Keys

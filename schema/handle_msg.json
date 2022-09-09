@@ -303,80 +303,6 @@
     {
       "type": "object",
       "required": [
-        "increase_allowance"
-      ],
-      "properties": {
-        "increase_allowance": {
-          "type": "object",
-          "required": [
-            "amount",
-            "spender"
-          ],
-          "properties": {
-            "amount": {
-              "$ref": "#/definitions/Uint128"
-            },
-            "expiration": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "uint64",
-              "minimum": 0.0
-            },
-            "padding": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "spender": {
-              "$ref": "#/definitions/HumanAddr"
-            }
-          }
-        }
-      }
-    },
-    {
-      "type": "object",
-      "required": [
-        "decrease_allowance"
-      ],
-      "properties": {
-        "decrease_allowance": {
-          "type": "object",
-          "required": [
-            "amount",
-            "spender"
-          ],
-          "properties": {
-            "amount": {
-              "$ref": "#/definitions/Uint128"
-            },
-            "expiration": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "uint64",
-              "minimum": 0.0
-            },
-            "padding": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "spender": {
-              "$ref": "#/definitions/HumanAddr"
-            }
-          }
-        }
-      }
-    },
-    {
-      "type": "object",
-      "required": [
         "transfer_from"
       ],
       "properties": {
@@ -784,25 +710,6 @@
         }
       }
     },
-    {
-      "type": "object",
-      "required": [
-        "revoke_permit"
-      ],
-      "properties": {
-        "revoke_permit": {
-          "type": "object",
-          "required": [
-            "permit_name"
-          ],
-          "properties": {
-            "permit_name": {
-              "type": "string"
-            }
-          }
-        }
-      }
-    }
   ],
   "definitions": {
     "Binary": {

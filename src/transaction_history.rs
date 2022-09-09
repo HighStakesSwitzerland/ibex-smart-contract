@@ -40,16 +40,12 @@ pub enum TxAction {
         sender: HumanAddr,
         recipient: HumanAddr,
     },
-    Mint {
-        minter: HumanAddr,
-        recipient: HumanAddr,
-    },
     Burn {
         burner: HumanAddr,
         owner: HumanAddr,
     },
-    Deposit {},
-    Redeem {},
+    Stake {},
+    Unstake {},
 }
 
 // Note that id is a globally incrementing counter.
@@ -104,10 +100,9 @@ impl StoredLegacyTransfer {
 #[repr(u8)]
 enum TxCode {
     Transfer = 0,
-    Mint = 1,
-    Burn = 2,
-    Deposit = 3,
-    Redeem = 4,
+    Stake = 1,
+    Unstake = 2,
+    Burn = 3,
 }
 
 impl TxCode {
@@ -119,10 +114,9 @@ impl TxCode {
         use TxCode::*;
         match n {
             0 => Ok(Transfer),
-            1 => Ok(Mint),
-            2 => Ok(Burn),
-            3 => Ok(Deposit),
-            4 => Ok(Redeem),
+            1 => Ok(Stake),
+            2 => Ok(Unstake),
+            3 => Ok(Burn),
             other => Err(StdError::generic_err(format!(
                 "Unexpected Tx code in transaction history: {} Storage is corrupted.",
                 other
@@ -149,25 +143,9 @@ impl StoredTxAction {
             address3: Some(recipient),
         }
     }
-    fn mint(minter: CanonicalAddr, recipient: CanonicalAddr) -> Self {
-        Self {
-            tx_type: TxCode::Mint.to_u8(),
-            address1: Some(minter),
-            address2: Some(recipient),
-            address3: None,
-        }
-    }
-    fn burn(owner: CanonicalAddr, burner: CanonicalAddr) -> Self {
-        Self {
-            tx_type: TxCode::Burn.to_u8(),
-            address1: Some(burner),
-            address2: Some(owner),
-            address3: None,
-        }
-    }
     fn deposit() -> Self {
         Self {
-            tx_type: TxCode::Deposit.to_u8(),
+            tx_type: TxCode::Stake.to_u8(),
             address1: None,
             address2: None,
             address3: None,
@@ -175,7 +153,7 @@ impl StoredTxAction {
     }
     fn redeem() -> Self {
         Self {
-            tx_type: TxCode::Redeem.to_u8(),
+            tx_type: TxCode::Unstake.to_u8(),
             address1: None,
             address2: None,
             address3: None,
@@ -187,9 +165,6 @@ impl StoredTxAction {
             StdError::generic_err(
                 "Missing address in stored Transfer transaction. Storage is corrupt",
             )
-        };
-        let mint_addr_err = || {
-            StdError::generic_err("Missing address in stored Mint transaction. Storage is corrupt")
         };
         let burn_addr_err = || {
             StdError::generic_err("Missing address in stored Burn transaction. Storage is corrupt")
@@ -210,13 +185,6 @@ impl StoredTxAction {
                     recipient,
                 }
             }
-            TxCode::Mint => {
-                let minter = self.address1.ok_or_else(mint_addr_err)?;
-                let recipient = self.address2.ok_or_else(mint_addr_err)?;
-                let minter = api.human_address(&minter)?;
-                let recipient = api.human_address(&recipient)?;
-                TxAction::Mint { minter, recipient }
-            }
             TxCode::Burn => {
                 let burner = self.address1.ok_or_else(burn_addr_err)?;
                 let owner = self.address2.ok_or_else(burn_addr_err)?;
@@ -224,8 +192,8 @@ impl StoredTxAction {
                 let owner = api.human_address(&owner)?;
                 TxAction::Burn { burner, owner }
             }
-            TxCode::Deposit => TxAction::Deposit {},
-            TxCode::Redeem => TxAction::Redeem {},
+            TxCode::Stake => TxAction::Stake {},
+            TxCode::Unstake => TxAction::Unstake {},
         };
 
         Ok(action)
@@ -339,51 +307,7 @@ pub fn store_transfer<S: Storage>(
     Ok(())
 }
 
-pub fn store_mint<S: Storage>(
-    store: &mut S,
-    minter: &CanonicalAddr,
-    recipient: &CanonicalAddr,
-    amount: Uint128,
-    denom: String,
-    memo: Option<String>,
-    block: &cosmwasm_std::BlockInfo,
-) -> StdResult<()> {
-    let id = increment_tx_count(store)?;
-    let coins = Coin { denom, amount };
-    let action = StoredTxAction::mint(minter.clone(), recipient.clone());
-    let tx = StoredRichTx::new(id, action, coins, memo, block);
-
-    if minter != recipient {
-        append_tx(store, &tx, recipient)?;
-    }
-    append_tx(store, &tx, minter)?;
-
-    Ok(())
-}
-
-pub fn store_burn<S: Storage>(
-    store: &mut S,
-    owner: &CanonicalAddr,
-    burner: &CanonicalAddr,
-    amount: Uint128,
-    denom: String,
-    memo: Option<String>,
-    block: &cosmwasm_std::BlockInfo,
-) -> StdResult<()> {
-    let id = increment_tx_count(store)?;
-    let coins = Coin { denom, amount };
-    let action = StoredTxAction::burn(owner.clone(), burner.clone());
-    let tx = StoredRichTx::new(id, action, coins, memo, block);
-
-    if burner != owner {
-        append_tx(store, &tx, owner)?;
-    }
-    append_tx(store, &tx, burner)?;
-
-    Ok(())
-}
-
-pub fn store_deposit<S: Storage>(
+pub fn store_stake<S: Storage>(
     store: &mut S,
     recipient: &CanonicalAddr,
     amount: Uint128,
@@ -400,7 +324,7 @@ pub fn store_deposit<S: Storage>(
     Ok(())
 }
 
-pub fn store_redeem<S: Storage>(
+pub fn store_unstake<S: Storage>(
     store: &mut S,
     redeemer: &CanonicalAddr,
     amount: Uint128,

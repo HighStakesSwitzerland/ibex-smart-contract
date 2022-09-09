@@ -195,60 +195,6 @@
     {
       "type": "object",
       "required": [
-        "increase_allowance"
-      ],
-      "properties": {
-        "increase_allowance": {
-          "type": "object",
-          "required": [
-            "allowance",
-            "owner",
-            "spender"
-          ],
-          "properties": {
-            "allowance": {
-              "$ref": "#/definitions/Uint128"
-            },
-            "owner": {
-              "$ref": "#/definitions/HumanAddr"
-            },
-            "spender": {
-              "$ref": "#/definitions/HumanAddr"
-            }
-          }
-        }
-      }
-    },
-    {
-      "type": "object",
-      "required": [
-        "decrease_allowance"
-      ],
-      "properties": {
-        "decrease_allowance": {
-          "type": "object",
-          "required": [
-            "allowance",
-            "owner",
-            "spender"
-          ],
-          "properties": {
-            "allowance": {
-              "$ref": "#/definitions/Uint128"
-            },
-            "owner": {
-              "$ref": "#/definitions/HumanAddr"
-            },
-            "spender": {
-              "$ref": "#/definitions/HumanAddr"
-            }
-          }
-        }
-      }
-    },
-    {
-      "type": "object",
-      "required": [
         "transfer_from"
       ],
       "properties": {

@@ -138,6 +138,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78cc372d058dcf6d5ecd98510e7fbc9e5aec4d21de70f65fea8fecebcd881bd4"
 
 [[package]]
+name = "ibex-smart-contract"
+version = "1.0.0"
+dependencies = [
+ "base64 0.12.3",
+ "bincode2",
+ "cosmwasm-schema",
+ "rand_chacha",
+ "rand_core",
+ "schemars",
+ "secret-cosmwasm-std",
+ "secret-cosmwasm-storage",
+ "secret-toolkit",
+ "serde",
+ "sha2",
+ "snafu",
+ "subtle",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -221,9 +240,9 @@ checksum = "90bde5296fc891b0cef12a6d03ddccc162ce7b2aff54160af9338f8d40df6d19"
 
 [[package]]
 name = "remain"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c35270ea384ac1762895831cc8acb96f171468e52cec82ed9186f9416209fa4"
+checksum = "06df529c0d271b27ac4a2c260f5ce2914b60bd44702cecec7b9f271adbdde23b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -389,9 +408,9 @@ dependencies = [
 
 [[package]]
 name = "secret-toolkit-utils"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "637bda6280fb95532aab0dee49d32035c6c2f6f41774f8d9c2903a646f0d9e67"
+checksum = "31d4c330c5aaff6e9c32a0aab082c9dacbd659953b09b16a0419bd120ac32ee3"
 dependencies = [
  "schemars",
  "secret-cosmwasm-std",
@@ -483,25 +502,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "snip20-reference-impl"
-version = "0.1.0"
-dependencies = [
- "base64 0.12.3",
- "bincode2",
- "cosmwasm-schema",
- "rand_chacha",
- "rand_core",
- "schemars",
- "secret-cosmwasm-std",
- "secret-cosmwasm-storage",
- "secret-toolkit",
- "serde",
- "sha2",
- "snafu",
- "subtle",
 ]
 
 [[package]]

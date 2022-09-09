@@ -15,19 +15,19 @@ At the time of token creation you may configure:
 
 To create a new token:
 
-```secretcli tx compute instantiate <code-id> '{"name":"<your_token_name>","symbol":"<your_token_symbol>","admin":"<optional_admin_address_defaults_to_the_from_address>","decimals":<number_of_decimals>,"initial_balances":[{"address":"<address1>","amount":"<amount_for_address1>"}],"prng_seed":"<base64_encoded_string>","config":{"public_total_supply":<true_or_false>,"enable_deposit":<true_or_false>,"enable_redeem":<true_or_false>,"enable_mint":<true_or_false>,"enable_burn":<true_or_false>}}' --label <token_label> --from <account>```
+```secretcli tx compute instantiate <code-id> '{"name":"<your_token_name>","symbol":"<your_token_symbol>","admin":"<optional_admin_address_defaults_to_the_from_address>","decimals":<number_of_decimals>,"initial_balances":[{"address":"<address1>","amount":"<amount_for_address1>"}],"prng_seed":"<base64_encoded_string>","config":{"public_total_supply":<true_or_false>}}' --label <token_label> --from <account>```
 
 The `admin` field is optional and will default to the "--from" address if you do not specify it.  The `initial_balances` field is optional, and you can specify as many addresses/balances as you like.  The `config` field as well as every field in the `config` is optional.  Any `config` fields not specified will default to `false`.
 
 To deposit: ***(This is public)***
 
-```secretcli tx compute execute <contract-address> '{"deposit": {}}' --amount 1000000uscrt --from <account>``` 
+```secretcli tx compute execute <contract-address> '{"deposit": {}}' --amount 1000000uscrt --from <account>```
 
 To send SSCRT:
 
 ```secretcli tx compute execute <contract-address> '{"transfer": {"recipient": "<destination_address>", "amount": "<amount_to_send>"}}' --from <account>```
 
-To set your viewing key: 
+To set your viewing key:
 
 ```secretcli tx compute execute <contract-address> '{"create_viewing_key": {"entropy": "<random_phrase>"}}' --from <account>```
 
@@ -52,7 +52,7 @@ To view the deposit/redeem exchange rate:
 ```secretcli q compute query <contract-address> '{"exchange_rate": {}}'```
 
 
-## Troubleshooting 
+## Troubleshooting
 
 All transactions are encrypted, so if you want to see the error returned by a failed transaction, you need to use the command
 

@@ -1,24 +1,25 @@
 #![allow(clippy::field_reassign_with_default)] // This is triggered in `#[derive(JsonSchema)]`
 
+use crate::batch;
+use crate::transaction_history::{RichTx, Tx};
+use crate::viewing_key_obj::ViewingKeyObj;
+
+use crate::claim::expiration::{Duration, HOUR};
+use cosmwasm_std::{Addr, Binary, StdError, StdResult, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::batch;
-use crate::transaction_history::{RichTx, Tx};
-use crate::viewing_key::ViewingKey;
-use cosmwasm_std::{Binary, HumanAddr, StdError, StdResult, Uint128};
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
 pub struct InitialBalance {
-    pub address: HumanAddr,
+    pub address: Addr,
     pub amount: Uint128,
     pub staked_amount: Uint128,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
-pub struct InitMsg {
+pub struct InstantiateMsg {
     pub name: String,
-    pub admin: Option<HumanAddr>,
+    pub admin: Option<Addr>,
     pub symbol: String,
     pub decimals: u8,
     pub initial_balances: Option<Vec<InitialBalance>>,
@@ -26,7 +27,7 @@ pub struct InitMsg {
     pub config: Option<InitConfig>,
 }
 
-impl InitMsg {
+impl InstantiateMsg {
     pub fn config(&self) -> InitConfig {
         self.config.clone().unwrap_or_default()
     }
@@ -41,15 +42,16 @@ pub struct InitConfig {
     /// Indicates whether the total supply is public or should be kept secret.
     /// default: False
     public_total_supply: Option<bool>,
-    /// Indicates whether deposit functionality should be enabled
+    /// Indicates whether stake functionality should be enabled
     /// default: False
-    enable_deposit: Option<bool>,
-    /// Indicates whether redeem functionality should be enabled
+    enable_stake: Option<bool>,
+    /// Indicates whether unstake functionality should be enabled
     /// default: False
-    enable_redeem: Option<bool>,
-    /// Indicates whether mint functionality should be enabled
-    /// default: False
-    enable_mint: Option<bool>,
+    enable_unstake: Option<bool>,
+    /// Min amount to stake (errors under)
+    min_stake_amount: Option<u128>,
+    /// Unbonding period
+    pub unbonding_period: Option<Duration>,
 }
 
 impl InitConfig {
@@ -57,41 +59,43 @@ impl InitConfig {
         self.public_total_supply.unwrap_or(false)
     }
 
-    pub fn deposit_enabled(&self) -> bool {
-        self.enable_deposit.unwrap_or(false)
+    pub fn staking_enabled(&self) -> bool {
+        self.enable_stake.unwrap_or(false)
     }
 
-    pub fn redeem_enabled(&self) -> bool {
-        self.enable_redeem.unwrap_or(false)
+    pub fn unstaking_enabled(&self) -> bool {
+        self.enable_unstake.unwrap_or(false)
     }
 
-    pub fn mint_enabled(&self) -> bool {
-        self.enable_mint.unwrap_or(false)
+    pub fn min_staked_amount(&self) -> Uint128 {
+        Uint128::new(self.min_stake_amount.unwrap_or(1_000_000))
+    }
+
+    pub fn unbonding_period(&self) -> Duration {
+        self.unbonding_period.unwrap_or(HOUR)
     }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 #[serde(rename_all = "snake_case")]
-pub enum HandleMsg {
+pub enum ExecuteMsg {
     // Native coin interactions
+    Stake {
+        amount: Uint128,
+    },
     Unstake {
         amount: Uint128,
-        denom: Option<String>,
-        padding: Option<String>,
-    },
-    Stake {
-        padding: Option<String>,
     },
 
     // Base ERC-20 stuff
     Transfer {
-        recipient: HumanAddr,
+        recipient: Addr,
         amount: Uint128,
         memo: Option<String>,
         padding: Option<String>,
     },
     Send {
-        recipient: HumanAddr,
+        recipient: Addr,
         recipient_code_hash: Option<String>,
         amount: Uint128,
         msg: Option<Binary>,
@@ -115,15 +119,15 @@ pub enum HandleMsg {
         padding: Option<String>,
     },
     TransferFrom {
-        owner: HumanAddr,
-        recipient: HumanAddr,
+        owner: Addr,
+        recipient: Addr,
         amount: Uint128,
         memo: Option<String>,
         padding: Option<String>,
     },
     SendFrom {
-        owner: HumanAddr,
-        recipient: HumanAddr,
+        owner: Addr,
+        recipient: Addr,
         recipient_code_hash: Option<String>,
         amount: Uint128,
         msg: Option<Binary>,
@@ -141,7 +145,7 @@ pub enum HandleMsg {
 
     // Admin
     ChangeAdmin {
-        address: HumanAddr,
+        address: Addr,
         padding: Option<String>,
     },
     SetContractStatus {
@@ -152,46 +156,76 @@ pub enum HandleMsg {
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug)]
 #[serde(rename_all = "snake_case")]
-pub enum HandleAnswer {
+pub enum ExecuteAnswer {
     // Native
-    Stake { status: ResponseStatus },
-    Unstake { status: ResponseStatus },
+    Stake {
+        status: ResponseStatus,
+        amount: Uint128,
+    },
+    Unstake {
+        status: ResponseStatus,
+        amount: Uint128,
+    },
 
     // Base
-    Transfer { status: ResponseStatus },
-    Send { status: ResponseStatus },
-    BatchSend { status: ResponseStatus },
-    RegisterReceive { status: ResponseStatus },
-    CreateViewingKey { key: ViewingKey },
-    SetViewingKey { status: ResponseStatus },
-    TransferFrom { status: ResponseStatus },
-    SendFrom { status: ResponseStatus },
-    BatchTransferFrom { status: ResponseStatus },
-    BatchSendFrom { status: ResponseStatus },
+    Transfer {
+        status: ResponseStatus,
+    },
+    Send {
+        status: ResponseStatus,
+    },
+    BatchSend {
+        status: ResponseStatus,
+    },
+    RegisterReceive {
+        status: ResponseStatus,
+    },
+    CreateViewingKey {
+        key: ViewingKeyObj,
+    },
+    SetViewingKey {
+        status: ResponseStatus,
+    },
+    TransferFrom {
+        status: ResponseStatus,
+    },
+    SendFrom {
+        status: ResponseStatus,
+    },
+    BatchTransferFrom {
+        status: ResponseStatus,
+    },
+    BatchSendFrom {
+        status: ResponseStatus,
+    },
 
     // Other
-    ChangeAdmin { status: ResponseStatus },
-    SetContractStatus { status: ResponseStatus },
+    ChangeAdmin {
+        status: ResponseStatus,
+    },
+    SetContractStatus {
+        status: ResponseStatus,
+    },
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
     TokenInfo {},
     TokenConfig {},
     ContractStatus {},
     Balance {
-        address: HumanAddr,
+        address: Addr,
         key: String,
     },
     TransferHistory {
-        address: HumanAddr,
+        address: Addr,
         key: String,
         page: Option<u32>,
         page_size: u32,
     },
     TransactionHistory {
-        address: HumanAddr,
+        address: Addr,
         key: String,
         page: Option<u32>,
         page_size: u32,
@@ -199,12 +233,14 @@ pub enum QueryMsg {
 }
 
 impl QueryMsg {
-    pub fn get_validation_params(&self) -> (Vec<&HumanAddr>, ViewingKey) {
+    pub fn get_validation_params(&self) -> (Vec<&Addr>, ViewingKeyObj) {
         match self {
-            Self::Balance { address, key } => (vec![address], ViewingKey(key.clone())),
-            Self::TransferHistory { address, key, .. } => (vec![address], ViewingKey(key.clone())),
+            Self::Balance { address, key } => (vec![address], ViewingKeyObj(key.clone())),
+            Self::TransferHistory { address, key, .. } => {
+                (vec![address], ViewingKeyObj(key.clone()))
+            }
             Self::TransactionHistory { address, key, .. } => {
-                (vec![address], ViewingKey(key.clone()))
+                (vec![address], ViewingKeyObj(key.clone()))
             }
             _ => panic!("This query type does not require authentication"),
         }
@@ -222,8 +258,10 @@ pub enum QueryAnswer {
     },
     TokenConfig {
         public_total_supply: bool,
-        staking_enable: bool,
+        staking_enabled: bool,
         unstaking_enabled: bool,
+        min_stake_amount: Uint128,
+        unbonding_period: Duration,
     },
     ContractStatus {
         status: ContractStatusLevel,
@@ -231,7 +269,6 @@ pub enum QueryAnswer {
     Balance {
         amount: Uint128,
         staked_amount: Uint128,
-
     },
     TransferHistory {
         txs: Vec<Tx>,
@@ -246,30 +283,30 @@ pub enum QueryAnswer {
     },
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
 pub struct CreateViewingKeyResponse {
     pub key: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseStatus {
     Success,
     Failure,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum ContractStatusLevel {
     NormalRun,
-    StopAllButRedeems,
+    StopAllButUnstake,
     StopAll,
 }
 
 pub fn status_level_to_u8(status_level: ContractStatusLevel) -> u8 {
     match status_level {
         ContractStatusLevel::NormalRun => 0,
-        ContractStatusLevel::StopAllButRedeems => 1,
+        ContractStatusLevel::StopAllButUnstake => 1,
         ContractStatusLevel::StopAll => 2,
     }
 }
@@ -277,7 +314,7 @@ pub fn status_level_to_u8(status_level: ContractStatusLevel) -> u8 {
 pub fn u8_to_status_level(status_level: u8) -> StdResult<ContractStatusLevel> {
     match status_level {
         0 => Ok(ContractStatusLevel::NormalRun),
-        1 => Ok(ContractStatusLevel::StopAllButRedeems),
+        1 => Ok(ContractStatusLevel::StopAllButUnstake),
         2 => Ok(ContractStatusLevel::StopAll),
         _ => Err(StdError::generic_err("Invalid state level")),
     }

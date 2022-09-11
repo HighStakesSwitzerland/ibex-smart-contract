@@ -1,18 +1,15 @@
-use std::any::type_name;
-use std::convert::TryFrom;
-
-use cosmwasm_std::{CanonicalAddr, HumanAddr, ReadonlyStorage, StdError, StdResult, Storage};
+use crate::claim::claim::Claims;
+use crate::claim::expiration::Duration;
+use cosmwasm_std::{Addr, StdError, StdResult, Storage, Uint128};
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
-
 use schemars::JsonSchema;
+use secret_toolkit::serialization::Json;
+use secret_toolkit::storage::{Item, Keymap};
 use serde::{Deserialize, Serialize};
 
-use crate::msg::{status_level_to_u8, u8_to_status_level, ContractStatusLevel};
-use crate::viewing_key::ViewingKey;
-use serde::de::DeserializeOwned;
+use crate::msg::ContractStatusLevel;
 
 pub static CONFIG_KEY: &[u8] = b"config";
-pub const PREFIX_TXS: &[u8] = b"transfers";
 
 pub const KEY_CONSTANTS: &[u8] = b"constants";
 pub const KEY_TOTAL_SUPPLY: &[u8] = b"total_supply";
@@ -25,333 +22,119 @@ pub const PREFIX_STAKED_BALANCES: &[u8] = b"staked_balances";
 pub const PREFIX_VIEW_KEY: &[u8] = b"viewingkey";
 pub const PREFIX_RECEIVERS: &[u8] = b"receivers";
 
+pub const CLAIMS: Claims = Claims::new("claims");
+
 // Config
 
 #[derive(Serialize, Debug, Deserialize, Clone, PartialEq, JsonSchema)]
 pub struct Constants {
     pub name: String,
-    pub admin: HumanAddr,
+    pub admin: Addr,
     pub symbol: String,
     pub decimals: u8,
-    pub prng_seed: Vec<u8>,
     // privacy configuration
     pub total_supply_is_public: bool,
-    // is deposit enabled
+    // is staking enabled
     pub stake_is_enabled: bool,
-    // is redeem enabled
+    // is unstaking enabled
     pub unstake_is_enabled: bool,
+    // minimal amount to stake
+    pub min_stake_amount: Uint128,
+    // unbonding period before being able to claim tokens
+    pub unbonding_period: Duration,
+
     // the address of this contract, used to validate query permits
-    pub contract_address: HumanAddr,
+    pub contract_address: Addr,
 }
+pub static CONSTANTS: Item<Constants> = Item::new(KEY_CONSTANTS);
 
-pub struct ReadonlyConfig<'a, S: ReadonlyStorage> {
-    storage: ReadonlyPrefixedStorage<'a, S>,
-}
-
-impl<'a, S: ReadonlyStorage> ReadonlyConfig<'a, S> {
-    pub fn from_storage(storage: &'a S) -> Self {
-        Self {
-            storage: ReadonlyPrefixedStorage::new(PREFIX_CONFIG, storage),
-        }
+impl Constants {
+    pub fn load(store: &dyn Storage) -> StdResult<Constants> {
+        CONSTANTS
+            .load(store)
+            .map_err(|_err| StdError::generic_err("no constants stored"))
     }
 
-    fn as_readonly(&self) -> ReadonlyConfigImpl<ReadonlyPrefixedStorage<S>> {
-        ReadonlyConfigImpl(&self.storage)
-    }
-
-    pub fn constants(&self) -> StdResult<Constants> {
-        self.as_readonly().constants()
-    }
-
-    pub fn total_supply(&self) -> u128 {
-        self.as_readonly().total_supply()
-    }
-
-    pub fn contract_status(&self) -> ContractStatusLevel {
-        self.as_readonly().contract_status()
-    }
-
-    pub fn tx_count(&self) -> u64 {
-        self.as_readonly().tx_count()
+    pub fn save(store: &mut dyn Storage, constants: &Constants) -> StdResult<()> {
+        CONSTANTS.save(store, constants)
     }
 }
 
-fn ser_bin_data<T: Serialize>(obj: &T) -> StdResult<Vec<u8>> {
-    bincode2::serialize(&obj).map_err(|e| StdError::serialize_err(type_name::<T>(), e))
-}
+pub static TOTAL_SUPPLY: Item<u128> = Item::new(KEY_TOTAL_SUPPLY);
+pub struct TotalSupplyStore {}
+impl TotalSupplyStore {
+    pub fn load(store: &dyn Storage) -> StdResult<u128> {
+        TOTAL_SUPPLY
+            .load(store)
+            .map_err(|_err| StdError::generic_err("no total supply stored"))
+    }
 
-fn deser_bin_data<T: DeserializeOwned>(data: &[u8]) -> StdResult<T> {
-    bincode2::deserialize::<T>(data).map_err(|e| StdError::serialize_err(type_name::<T>(), e))
-}
-
-fn set_bin_data<T: Serialize, S: Storage>(storage: &mut S, key: &[u8], data: &T) -> StdResult<()> {
-    let bin_data = ser_bin_data(data)?;
-
-    storage.set(key, &bin_data);
-    Ok(())
-}
-
-fn get_bin_data<T: DeserializeOwned, S: ReadonlyStorage>(storage: &S, key: &[u8]) -> StdResult<T> {
-    let bin_data = storage.get(key);
-
-    match bin_data {
-        None => Err(StdError::not_found("Key not found in storage")),
-        Some(bin_data) => Ok(deser_bin_data(&bin_data)?),
+    pub fn save(store: &mut dyn Storage, supply: u128) -> StdResult<()> {
+        TOTAL_SUPPLY.save(store, &supply)
     }
 }
 
-pub struct Config<'a, S: Storage> {
-    storage: PrefixedStorage<'a, S>,
-}
-
-impl<'a, S: Storage> Config<'a, S> {
-    pub fn from_storage(storage: &'a mut S) -> Self {
-        Self {
-            storage: PrefixedStorage::new(PREFIX_CONFIG, storage),
-        }
+pub static CONTRACT_STATUS: Item<ContractStatusLevel, Json> = Item::new(KEY_CONTRACT_STATUS);
+pub struct ContractStatusStore {}
+impl ContractStatusStore {
+    pub fn load(store: &dyn Storage) -> StdResult<ContractStatusLevel> {
+        CONTRACT_STATUS
+            .load(store)
+            .map_err(|_err| StdError::generic_err("no contract status stored"))
     }
 
-    fn as_readonly(&self) -> ReadonlyConfigImpl<PrefixedStorage<S>> {
-        ReadonlyConfigImpl(&self.storage)
-    }
-
-    pub fn constants(&self) -> StdResult<Constants> {
-        self.as_readonly().constants()
-    }
-
-    pub fn set_constants(&mut self, constants: &Constants) -> StdResult<()> {
-        set_bin_data(&mut self.storage, KEY_CONSTANTS, constants)
-    }
-
-    pub fn total_supply(&self) -> u128 {
-        self.as_readonly().total_supply()
-    }
-
-    pub fn set_total_supply(&mut self, supply: u128) {
-        self.storage.set(KEY_TOTAL_SUPPLY, &supply.to_be_bytes());
-    }
-
-    pub fn contract_status(&self) -> ContractStatusLevel {
-        self.as_readonly().contract_status()
-    }
-
-    pub fn set_contract_status(&mut self, status: ContractStatusLevel) {
-        let status_u8 = status_level_to_u8(status);
-        self.storage
-            .set(KEY_CONTRACT_STATUS, &status_u8.to_be_bytes());
-    }
-
-    pub fn tx_count(&self) -> u64 {
-        self.as_readonly().tx_count()
-    }
-
-    pub fn set_tx_count(&mut self, count: u64) -> StdResult<()> {
-        set_bin_data(&mut self.storage, KEY_TX_COUNT, &count)
+    pub fn save(store: &mut dyn Storage, status: ContractStatusLevel) -> StdResult<()> {
+        CONTRACT_STATUS.save(store, &status)
     }
 }
 
-/// This struct refactors out the readonly methods that we need for `Config` and `ReadonlyConfig`
-/// in a way that is generic over their mutability.
-///
-/// This was the only way to prevent code duplication of these methods because of the way
-/// that `ReadonlyPrefixedStorage` and `PrefixedStorage` are implemented in `cosmwasm-std`
-struct ReadonlyConfigImpl<'a, S: ReadonlyStorage>(&'a S);
-
-impl<'a, S: ReadonlyStorage> ReadonlyConfigImpl<'a, S> {
-    fn constants(&self) -> StdResult<Constants> {
-        let consts_bytes = self
-            .0
-            .get(KEY_CONSTANTS)
-            .ok_or_else(|| StdError::generic_err("no constants stored in configuration"))?;
-        bincode2::deserialize::<Constants>(&consts_bytes)
-            .map_err(|e| StdError::serialize_err(type_name::<Constants>(), e))
+pub static TX_COUNT: Item<u64> = Item::new(KEY_TX_COUNT);
+pub struct TxCountStore {}
+impl TxCountStore {
+    pub fn load(store: &dyn Storage) -> u64 {
+        TX_COUNT.load(store).unwrap_or_default()
     }
 
-    fn total_supply(&self) -> u128 {
-        let supply_bytes = self
-            .0
-            .get(KEY_TOTAL_SUPPLY)
-            .expect("no total supply stored in config");
-        // This unwrap is ok because we know we stored things correctly
-        slice_to_u128(&supply_bytes).unwrap()
-    }
-
-    fn contract_status(&self) -> ContractStatusLevel {
-        let supply_bytes = self
-            .0
-            .get(KEY_CONTRACT_STATUS)
-            .expect("no contract status stored in config");
-
-        // These unwraps are ok because we know we stored things correctly
-        let status = slice_to_u8(&supply_bytes).unwrap();
-        u8_to_status_level(status).unwrap()
-    }
-
-    pub fn tx_count(&self) -> u64 {
-        get_bin_data(self.0, KEY_TX_COUNT).unwrap_or_default()
+    pub fn save(store: &mut dyn Storage, count: u64) -> StdResult<()> {
+        TX_COUNT.save(store, &count)
     }
 }
 
-// Balances
-
-pub struct ReadonlyBalances<'a, S: ReadonlyStorage> {
-    storage: ReadonlyPrefixedStorage<'a, S>,
-}
-
-impl<'a, S: ReadonlyStorage> ReadonlyBalances<'a, S> {
-    pub fn from_storage(storage: &'a S) -> Self {
-        Self {
-            storage: ReadonlyPrefixedStorage::new(PREFIX_BALANCES, storage),
-        }
+pub static BALANCES: Keymap<Addr, u128> = Keymap::new(PREFIX_BALANCES);
+pub struct BalancesStore {}
+impl BalancesStore {
+    pub fn load(store: &dyn Storage, account: &Addr) -> u128 {
+        BALANCES.get(store, account).unwrap_or_default()
     }
 
-    fn balance_as_readonly(&self) -> ReadonlyBalancesImpl<ReadonlyPrefixedStorage<S>> {
-        ReadonlyBalancesImpl(&self.storage)
-    }
-
-    pub fn account_amount(&self, account: &CanonicalAddr) -> u128 {
-        self.balance_as_readonly().account_amount(account)
+    pub fn save(store: &mut dyn Storage, account: &Addr, amount: u128) -> StdResult<()> {
+        BALANCES.insert(store, account, &amount)
     }
 }
 
-pub struct ReadonlyStakedBalances<'a, S: ReadonlyStorage> {
-    storage: ReadonlyPrefixedStorage<'a, S>,
-}
-
-impl<'a, S: ReadonlyStorage> ReadonlyStakedBalances<'a, S> {
-    pub fn from_storage(storage: &'a S) -> Self {
-        Self {
-            storage: ReadonlyPrefixedStorage::new(PREFIX_STAKED_BALANCES, storage),
-        }
+pub static STAKED_BALANCES: Keymap<Addr, u128> = Keymap::new(PREFIX_STAKED_BALANCES);
+pub struct StakedBalancesStore {}
+impl StakedBalancesStore {
+    pub fn load(store: &dyn Storage, account: &Addr) -> u128 {
+        STAKED_BALANCES.get(store, account).unwrap_or_default()
     }
 
-    fn balance_as_readonly(&self) -> ReadonlyBalancesImpl<ReadonlyPrefixedStorage<S>> {
-        ReadonlyBalancesImpl(&self.storage)
+    pub fn save(store: &mut dyn Storage, account: &Addr, amount: u128) -> StdResult<()> {
+        STAKED_BALANCES.insert(store, account, &amount)
     }
-
-    pub fn account_amount(&self, account: &CanonicalAddr) -> u128 {
-        self.balance_as_readonly().account_amount(account)
-    }
-}
-
-pub struct Balances<'a, S: Storage> {
-    storage: PrefixedStorage<'a, S>,
-}
-
-impl<'a, S: Storage> Balances<'a, S> {
-    pub fn from_storage(storage: &'a mut S) -> Self {
-        Self {
-            storage: PrefixedStorage::new(PREFIX_BALANCES, storage),
-        }
-    }
-
-    fn as_readonly(&self) -> ReadonlyBalancesImpl<PrefixedStorage<S>> {
-        ReadonlyBalancesImpl(&self.storage)
-    }
-
-    pub fn balance(&self, account: &CanonicalAddr) -> u128 {
-        self.as_readonly().account_amount(account)
-    }
-
-    pub fn set_account_balance(&mut self, account: &CanonicalAddr, amount: u128) {
-        self.storage.set(account.as_slice(), &amount.to_be_bytes())
-    }
-}
-
-pub struct StakedBalances<'a, S: Storage> {
-    storage: PrefixedStorage<'a, S>,
-}
-
-impl<'a, S: Storage> StakedBalances<'a, S> {
-    pub fn from_storage(storage: &'a mut S) -> Self {
-        Self {
-            storage: PrefixedStorage::new(PREFIX_STAKED_BALANCES, storage),
-        }
-    }
-
-    fn as_readonly(&self) -> ReadonlyBalancesImpl<PrefixedStorage<S>> {
-        ReadonlyBalancesImpl(&self.storage)
-    }
-
-    pub fn balance(&self, account: &CanonicalAddr) -> u128 {
-        self.as_readonly().account_amount(account)
-    }
-
-    pub fn set_account_balance(&mut self, account: &CanonicalAddr, amount: u128) {
-        self.storage.set(account.as_slice(), &amount.to_be_bytes())
-    }
-}
-
-/// This struct refactors out the readonly methods that we need for `Balances` and `ReadonlyBalances`
-/// in a way that is generic over their mutability.
-///
-/// This was the only way to prevent code duplication of these methods because of the way
-/// that `ReadonlyPrefixedStorage` and `PrefixedStorage` are implemented in `cosmwasm-std`
-struct ReadonlyBalancesImpl<'a, S: ReadonlyStorage>(&'a S);
-
-impl<'a, S: ReadonlyStorage> ReadonlyBalancesImpl<'a, S> {
-    pub fn account_amount(&self, account: &CanonicalAddr) -> u128 {
-        let account_bytes = account.as_slice();
-        let result = self.0.get(account_bytes);
-        match result {
-            // This unwrap is ok because we know we stored things correctly
-            Some(balance_bytes) => slice_to_u128(&balance_bytes).unwrap(),
-            None => 0,
-        }
-    }
-}
-
-// Viewing Keys
-
-pub fn write_viewing_key<S: Storage>(store: &mut S, owner: &CanonicalAddr, key: &ViewingKey) {
-    let mut balance_store = PrefixedStorage::new(PREFIX_VIEW_KEY, store);
-    balance_store.set(owner.as_slice(), &key.to_hashed());
-}
-
-pub fn read_viewing_key<S: Storage>(store: &S, owner: &CanonicalAddr) -> Option<Vec<u8>> {
-    let balance_store = ReadonlyPrefixedStorage::new(PREFIX_VIEW_KEY, store);
-    balance_store.get(owner.as_slice())
 }
 
 // Receiver Interface
 
-pub fn get_receiver_hash<S: ReadonlyStorage>(
-    store: &S,
-    account: &HumanAddr,
-) -> Option<StdResult<String>> {
-    let store = ReadonlyPrefixedStorage::new(PREFIX_RECEIVERS, store);
+pub fn get_receiver_hash(store: &dyn Storage, account: &Addr) -> Option<StdResult<String>> {
+    let store = ReadonlyPrefixedStorage::new(store, PREFIX_RECEIVERS);
     store.get(account.as_str().as_bytes()).map(|data| {
         String::from_utf8(data)
             .map_err(|_err| StdError::invalid_utf8("stored code hash was not a valid String"))
     })
 }
 
-pub fn set_receiver_hash<S: Storage>(store: &mut S, account: &HumanAddr, code_hash: String) {
-    let mut store = PrefixedStorage::new(PREFIX_RECEIVERS, store);
+pub fn set_receiver_hash(store: &mut dyn Storage, account: &Addr, code_hash: String) {
+    let mut store = PrefixedStorage::new(store, PREFIX_RECEIVERS);
     store.set(account.as_str().as_bytes(), code_hash.as_bytes());
-}
-
-// Helpers
-
-/// Converts 16 bytes value into u128
-/// Errors if data found that is not 16 bytes
-fn slice_to_u128(data: &[u8]) -> StdResult<u128> {
-    match <[u8; 16]>::try_from(data) {
-        Ok(bytes) => Ok(u128::from_be_bytes(bytes)),
-        Err(_) => Err(StdError::generic_err(
-            "Corrupted data found. 16 byte expected.",
-        )),
-    }
-}
-
-/// Converts 1 byte value into u8
-/// Errors if data found that is not 1 byte
-fn slice_to_u8(data: &[u8]) -> StdResult<u8> {
-    if data.len() == 1 {
-        Ok(data[0])
-    } else {
-        Err(StdError::generic_err(
-            "Corrupted data found. 1 byte expected.",
-        ))
-    }
 }

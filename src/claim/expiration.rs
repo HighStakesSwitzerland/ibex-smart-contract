@@ -81,11 +81,6 @@ impl PartialOrd for Expiration {
     }
 }
 
-#[allow(dead_code)]
-pub const HOUR: Duration = Duration::Time(60 * 60);
-#[allow(dead_code)]
-pub const DAY: Duration = Duration::Time(24 * 60 * 60);
-#[allow(dead_code)]
 pub const WEEK: Duration = Duration::Time(7 * 24 * 60 * 60);
 
 /// Duration is a delta of time. You can add it to a BlockInfo or Expiration to

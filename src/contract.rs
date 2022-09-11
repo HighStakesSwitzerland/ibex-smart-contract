@@ -127,6 +127,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
                 {
                     try_unstake(deps, env, &info, amount)
                 }
+                ExecuteMsg::Claims {} => try_claim(deps, env, &info),
                 _ => Err(StdError::generic_err(
                     "This contract is stopped and this action is not allowed",
                 )),
@@ -140,7 +141,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
         // Native
         ExecuteMsg::Stake { amount, .. } => try_stake(deps, env, &info, amount),
         ExecuteMsg::Unstake { amount, .. } => try_unstake(deps, env, &info, amount),
-
+        ExecuteMsg::Claims { .. } => try_claim(deps, env, &info),
         // Base
         ExecuteMsg::Transfer {
             recipient,
@@ -229,6 +230,7 @@ pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
             return match msg {
                 // Base
                 QueryMsg::Balance { address, .. } => query_balance(deps, &address),
+                QueryMsg::Claim { address, .. } => query_claim(deps, &address),
                 QueryMsg::TransferHistory {
                     address,
                     page,
@@ -481,6 +483,33 @@ fn try_unstake(
     )?;
 
     Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Unstake { status: Success })?))
+}
+
+fn try_claim(deps: DepsMut, env: Env, info: &MessageInfo) -> StdResult<Response> {
+    let release = dbg!(CLAIMS.claim_tokens(deps.storage, &info.sender, &env.block, None)?);
+
+    if release.is_zero() {
+        return Err(StdError::generic_err(format!("Nothing to claim")));
+    }
+
+    // update balance
+    let unstaked_balances = dbg!(BalancesStore::load(deps.storage, &info.sender));
+    BalancesStore::save(
+        deps.storage,
+        &info.sender,
+        unstaked_balances + release.u128(),
+    )?;
+
+    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Claim { status: Success })?))
+}
+
+fn query_claim(deps: Deps, account: &Addr) -> StdResult<Binary> {
+    let claim_result = dbg!(CLAIMS.query_claims(deps, &deps.api.addr_validate(account.as_str())?));
+
+    let response = QueryAnswer::Claim {
+        amounts: claim_result.unwrap().claims,
+    };
+    to_binary(&response)
 }
 
 fn try_transfer_impl(
@@ -891,11 +920,13 @@ fn is_valid_symbol(symbol: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::claim::expiration::Duration;
-    use cosmwasm_std::testing::*;
-    use cosmwasm_std::{from_binary, Coin, OwnedDeps, QueryResponse, ReplyOn, SubMsg, WasmMsg};
     use std::any::Any;
 
+    use cosmwasm_std::testing::*;
+    use cosmwasm_std::{from_binary, Coin, OwnedDeps, QueryResponse, ReplyOn, SubMsg, WasmMsg};
+
+    use crate::claim::claim::Claim;
+    use crate::claim::expiration::Duration;
     use crate::msg::ResponseStatus;
     use crate::msg::{InitConfig, InitialBalance};
     use crate::viewing_key_obj::ViewingKeyObj;
@@ -956,6 +987,7 @@ mod tests {
             .as_bytes(),
         ))
         .unwrap();
+
         let init_msg = InstantiateMsg {
             name: "sibex".to_string(),
             admin: Some(Addr::unchecked("admin".to_string())),
@@ -1592,7 +1624,7 @@ mod tests {
         let error = extract_error_msg(handle_result);
         assert!(error.contains("Insufficient funds to unstake: balance=15000, wanted=1000000"));
 
-        // unstale 1000
+        // unstake 1000
         let handle_msg = ExecuteMsg::Unstake {
             amount: Uint128::new(1000),
         };
@@ -1608,7 +1640,106 @@ mod tests {
 
         let canonical = Addr::unchecked("butler".to_string());
         assert_eq!(StakedBalancesStore::load(&deps.storage, &canonical), 14000);
-        assert_eq!(BalancesStore::load(&deps.storage, &canonical), 6000);
+
+        // check pending claims
+        let constants = Constants::load(&deps.storage).unwrap();
+        let expires = constants.unbonding_period.after(&mock_env().block);
+        let info = mock_info("butler", &[]);
+
+        let claim_response = CLAIMS.query_claims(deps.as_ref(), &info.sender);
+        assert!(
+            claim_response.is_ok(),
+            "Init failed: {}",
+            claim_response.err().unwrap()
+        );
+        let claim_response = claim_response.unwrap();
+        assert_eq!(claim_response.claims, vec![Claim::new(1000, expires)]);
+    }
+
+    #[test]
+    fn test_token_claim() {
+        let (init_result, mut deps) = init_helper_with_config(
+            vec![InitialBalance {
+                address: Addr::unchecked("lebron".to_string()),
+                amount: Uint128::new(5000),
+                staked_amount: Uint128::new(0),
+            }],
+            true,
+            true,
+            0,
+        );
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
+
+        let mut env = mock_env();
+        let canonical = Addr::unchecked("lebron".to_string());
+
+        // stake some tokens
+        let handle_msg = ExecuteMsg::Stake {
+            amount: Uint128::new(1000),
+        };
+        let info = mock_info("lebron", &[]);
+        let handle_result = execute(deps.as_mut(), env.clone(), info, handle_msg);
+        assert!(
+            handle_result.is_ok(),
+            "handle() failed: {}",
+            handle_result.err().unwrap()
+        );
+
+        // check balances
+        assert_eq!(BalancesStore::load(&deps.storage, &canonical), 4000);
+        assert_eq!(StakedBalancesStore::load(&deps.storage, &canonical), 1000);
+
+        // unstake them
+        let handle_msg = ExecuteMsg::Unstake {
+            amount: Uint128::new(1000),
+        };
+        let info = mock_info("lebron", &[]);
+        let handle_result = execute(deps.as_mut(), env.clone(), info, handle_msg);
+
+        assert!(
+            handle_result.is_ok(),
+            "handle() failed: {}",
+            handle_result.err().unwrap()
+        );
+
+        // check balances
+        assert_eq!(BalancesStore::load(&deps.storage, &canonical), 4000);
+        assert_eq!(StakedBalancesStore::load(&deps.storage, &canonical), 0);
+
+        // check claims before expiration
+        let constants = Constants::load(&deps.storage).unwrap();
+        let expires = constants.unbonding_period.after(&mock_env().block);
+        let info = mock_info("lebron", &[]);
+
+        let claim_response = CLAIMS.query_claims(deps.as_ref(), &info.sender);
+        assert!(
+            claim_response.is_ok(),
+            "Init failed: {}",
+            claim_response.err().unwrap()
+        );
+        let claim_response = dbg!(claim_response.unwrap());
+        assert_eq!(claim_response.claims, vec![Claim::new(1000, expires)]);
+
+        // wait for height to unstake
+        env.block.time = env.block.time.plus_nanos(10000000000000000);
+
+        dbg!(env.block.time);
+        // check claims
+        let handle_msg = ExecuteMsg::Claims {};
+        let info = mock_info("lebron", &[]);
+        let handle_result = dbg!(execute(deps.as_mut(), env.clone(), info, handle_msg));
+
+        assert!(
+            handle_result.is_ok(),
+            "handle() failed: {}",
+            handle_result.err().unwrap()
+        );
+        assert_eq!(BalancesStore::load(&deps.storage, &canonical), 5000);
+        assert_eq!(StakedBalancesStore::load(&deps.storage, &canonical), 0);
     }
 
     #[test]
@@ -1644,7 +1775,6 @@ mod tests {
             amount: Uint128::new(1000),
         };
         let info = mock_info("lebron", &[]);
-
         let handle_result = execute(deps_for_failure.as_mut(), mock_env(), info, handle_msg);
         let error = extract_error_msg(handle_result);
         assert!(error.contains("Stake functionality is not enabled for this token."));
@@ -1654,7 +1784,6 @@ mod tests {
             amount: Uint128::new(1000),
         };
         let info = mock_info("lebron", &[]);
-
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
         assert!(
             handle_result.is_ok(),
@@ -1664,7 +1793,6 @@ mod tests {
 
         let canonical = Addr::unchecked("lebron".to_string());
         assert_eq!(BalancesStore::load(&deps.storage, &canonical), 4000);
-
         assert_eq!(StakedBalancesStore::load(&deps.storage, &canonical), 16000);
     }
 
@@ -1692,9 +1820,7 @@ mod tests {
             padding: None,
         };
         let info = mock_info("not_admin", &[]);
-
         let handle_result = execute(deps.as_mut(), mock_env(), info, pause_msg);
-
         let error = extract_error_msg(handle_result);
         assert!(error.contains(&admin_err.clone()));
 
@@ -1703,9 +1829,7 @@ mod tests {
             padding: None,
         };
         let info = mock_info("not_admin", &[]);
-
         let handle_result = execute(deps.as_mut(), mock_env(), info, change_admin_msg);
-
         let error = extract_error_msg(handle_result);
         assert!(error.contains(&admin_err.clone()));
     }
@@ -1732,9 +1856,7 @@ mod tests {
             level: ContractStatusLevel::StopAllButUnstake,
             padding: None,
         };
-
         let info = mock_info("admin", &[]);
-
         let handle_result = execute(deps.as_mut(), mock_env(), info, pause_msg);
 
         assert!(
@@ -1750,9 +1872,7 @@ mod tests {
             padding: None,
         };
         let info = mock_info("admin", &[]);
-
         let handle_result = execute(deps.as_mut(), mock_env(), info, send_msg);
-
         let error = extract_error_msg(handle_result);
         assert_eq!(
             error,
@@ -1763,7 +1883,6 @@ mod tests {
             amount: Uint128::new(5000),
         };
         let info = mock_info("lebron", &[]);
-
         let handle_result = execute(deps.as_mut(), mock_env(), info, withdraw_msg);
 
         assert!(
@@ -1960,12 +2079,14 @@ mod tests {
         let init_admin = Addr::unchecked("admin".to_string());
         let init_symbol = "IBEX".to_string();
         let init_decimals = 8;
+        let min_stake_amount = 10;
         let init_config: InitConfig = from_binary(&Binary::from(
             format!(
                 "{{\"public_total_supply\":{},
                 \"enable_stake\":{},
-                \"enable_unstake\":{}}}",
-                true, false, false
+                \"enable_unstake\":{},
+                \"min_stake_amount\":\"{}\"}}",
+                true, false, false, min_stake_amount
             )
             .as_bytes(),
         ))
@@ -2004,19 +2125,19 @@ mod tests {
             query_result.err().unwrap()
         );
         let query_answer: QueryAnswer = from_binary(&query_result.unwrap()).unwrap();
-        let unbond_period = Duration::Time(60);
-        let min_stake_amount = Uint128::new(1);
         match query_answer {
             QueryAnswer::TokenConfig {
                 public_total_supply,
                 staking_enabled,
                 unstaking_enabled,
                 min_stake_amount,
-                unbonding_period: unbond_period,
+                unbonding_period,
             } => {
                 assert_eq!(public_total_supply, true);
                 assert_eq!(staking_enabled, false);
                 assert_eq!(unstaking_enabled, false);
+                assert_eq!(unbonding_period, Duration::Time(10));
+                assert_eq!(min_stake_amount, Uint128::new(10));
             }
             _ => panic!("unexpected"),
         }

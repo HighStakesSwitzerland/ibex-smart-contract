@@ -4,7 +4,8 @@ use crate::batch;
 use crate::transaction_history::{RichTx, Tx};
 use crate::viewing_key_obj::ViewingKeyObj;
 
-use crate::claim::expiration::{Duration, HOUR};
+use crate::claim::claim::Claim;
+use crate::claim::expiration::{Duration, WEEK};
 use cosmwasm_std::{Addr, Binary, StdError, StdResult, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -51,7 +52,7 @@ pub struct InitConfig {
     /// Min amount to stake (errors under)
     min_stake_amount: Option<u128>,
     /// Unbonding period
-    pub unbonding_period: Option<Duration>,
+    unbonding_period: Option<Duration>,
 }
 
 impl InitConfig {
@@ -72,7 +73,8 @@ impl InitConfig {
     }
 
     pub fn unbonding_period(&self) -> Duration {
-        self.unbonding_period.unwrap_or(HOUR)
+        // 7 days unstaking period
+        self.unbonding_period.unwrap_or(WEEK * 7)
     }
 }
 
@@ -86,7 +88,7 @@ pub enum ExecuteMsg {
     Unstake {
         amount: Uint128,
     },
-
+    Claims {},
     // Base ERC-20 stuff
     Transfer {
         recipient: Addr,
@@ -160,7 +162,7 @@ pub enum ExecuteAnswer {
     // Native
     Stake { status: ResponseStatus },
     Unstake { status: ResponseStatus },
-
+    Claim { status: ResponseStatus },
     // Base
     Transfer { status: ResponseStatus },
     Send { status: ResponseStatus },
@@ -185,6 +187,10 @@ pub enum QueryMsg {
     TokenConfig {},
     ContractStatus {},
     Balance {
+        address: Addr,
+        key: String,
+    },
+    Claim {
         address: Addr,
         key: String,
     },
@@ -239,6 +245,9 @@ pub enum QueryAnswer {
     Balance {
         amount: Uint128,
         staked_amount: Uint128,
+    },
+    Claim {
+        amounts: Vec<Claim>,
     },
     TransferHistory {
         txs: Vec<Tx>,

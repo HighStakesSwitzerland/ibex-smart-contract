@@ -4,9 +4,6 @@ use std::marker::PhantomData;
 
 #[cfg(feature = "iterator")]
 use crate::bound::{Bound, PrefixBound};
-use crate::storage::helpers::query_raw;
-use crate::storage::keys::{Key, PrimaryKey};
-use crate::storage::path::Path;
 #[cfg(feature = "iterator")]
 use crate::de::KeyDeserialize;
 #[cfg(feature = "iterator")]
@@ -15,6 +12,9 @@ use crate::iter_helpers::{deserialize_kv, deserialize_v};
 use crate::keys::Prefixer;
 #[cfg(feature = "iterator")]
 use crate::prefix::{namespaced_prefix_range, Prefix};
+use crate::storage::helpers::query_raw;
+use crate::storage::keys::{Key, PrimaryKey};
+use crate::storage::path::Path;
 use cosmwasm_std::{from_slice, Addr, CustomQuery, QuerierWrapper, StdError, StdResult, Storage};
 
 #[derive(Debug, Clone)]

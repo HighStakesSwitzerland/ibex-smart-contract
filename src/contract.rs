@@ -86,7 +86,7 @@ pub fn instantiate(
             name: msg.name,
             symbol: msg.symbol,
             decimals: msg.decimals,
-            admin: admin.clone(),
+            admin,
             total_supply_is_public: init_config.public_total_supply(),
             stake_is_enabled: init_config.staking_enabled(),
             unstake_is_enabled: init_config.unstaking_enabled(),
@@ -489,7 +489,7 @@ fn try_claim(deps: DepsMut, env: Env, info: &MessageInfo) -> StdResult<Response>
     let release = dbg!(CLAIMS.claim_tokens(deps.storage, &info.sender, &env.block, None)?);
 
     if release.is_zero() {
-        return Err(StdError::generic_err(format!("Nothing to claim")));
+        return Err(StdError::generic_err("Nothing to claim"));
     }
 
     // update balance
@@ -925,10 +925,10 @@ mod tests {
     use cosmwasm_std::testing::*;
     use cosmwasm_std::{from_binary, Coin, OwnedDeps, QueryResponse, ReplyOn, SubMsg, WasmMsg};
 
-    use crate::claim::claim::Claim;
-    use crate::claim::expiration::Duration;
     use crate::msg::ResponseStatus;
     use crate::msg::{InitConfig, InitialBalance};
+    use crate::storage::claim::Claim;
+    use crate::storage::expiration::Duration;
     use crate::viewing_key_obj::ViewingKeyObj;
 
     use super::*;

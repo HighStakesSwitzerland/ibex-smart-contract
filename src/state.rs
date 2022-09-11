@@ -1,5 +1,5 @@
-use crate::claim::claim::Claims;
-use crate::claim::expiration::Duration;
+use crate::storage::claim::Claims;
+use crate::storage::expiration::Duration;
 use cosmwasm_std::{Addr, StdError, StdResult, Storage, Uint128};
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
 use schemars::JsonSchema;
@@ -26,7 +26,7 @@ pub const CLAIMS: Claims = Claims::new("claims");
 
 // Config
 
-#[derive(Serialize, Debug, Deserialize, Clone, PartialEq, JsonSchema)]
+#[derive(Serialize, Debug, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
 pub struct Constants {
     pub name: String,
     pub admin: Addr,
@@ -40,7 +40,7 @@ pub struct Constants {
     pub unstake_is_enabled: bool,
     // minimal amount to stake
     pub min_stake_amount: Uint128,
-    // unbonding period before being able to claim tokens
+    // unbonding period before being able to storage tokens
     pub unbonding_period: Duration,
 
     // the address of this contract, used to validate query permits

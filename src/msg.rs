@@ -4,8 +4,8 @@ use crate::batch;
 use crate::transaction_history::{RichTx, Tx};
 use crate::viewing_key_obj::ViewingKeyObj;
 
-use crate::claim::claim::Claim;
-use crate::claim::expiration::{Duration, WEEK};
+use crate::storage::claim::Claim;
+use crate::storage::expiration::{Duration, WEEK};
 use cosmwasm_std::{Addr, Binary, StdError, StdResult, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

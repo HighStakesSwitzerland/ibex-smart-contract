@@ -7,7 +7,7 @@
 use serde::de::DeserializeOwned;
 use std::any::type_name;
 
-use crate::claim::keys::Key;
+use crate::storage::keys::Key;
 
 use cosmwasm_std::{
     from_slice, to_vec, Addr, Binary, ContractResult, CustomQuery, QuerierWrapper, QueryRequest,

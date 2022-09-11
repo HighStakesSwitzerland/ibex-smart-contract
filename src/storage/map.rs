@@ -4,9 +4,9 @@ use std::marker::PhantomData;
 
 #[cfg(feature = "iterator")]
 use crate::bound::{Bound, PrefixBound};
-use crate::claim::helpers::query_raw;
-use crate::claim::keys::{Key, PrimaryKey};
-use crate::claim::path::Path;
+use crate::storage::helpers::query_raw;
+use crate::storage::keys::{Key, PrimaryKey};
+use crate::storage::path::Path;
 #[cfg(feature = "iterator")]
 use crate::de::KeyDeserialize;
 #[cfg(feature = "iterator")]

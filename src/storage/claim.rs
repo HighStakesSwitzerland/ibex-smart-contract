@@ -2,17 +2,17 @@ use cosmwasm_std::{Addr, BlockInfo, CustomQuery, Deps, StdResult, Storage, Uint1
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::claim::expiration::Expiration;
-use crate::claim::map::Map;
+use crate::storage::expiration::Expiration;
+use crate::storage::map::Map;
 
 // TODO: pull into utils?
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct ClaimsResponse {
     pub claims: Vec<Claim>,
 }
 
 // TODO: pull into utils?
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct Claim {
     pub amount: Uint128,
     pub release_at: Expiration,
@@ -27,7 +27,7 @@ impl Claim {
     }
 }
 
-// TODO: revisit design (split each claim on own key?)
+// TODO: revisit design (split each storage on own key?)
 pub struct Claims<'a>(Map<'a, &'a Addr, Vec<Claim>>);
 
 impl<'a> Claims<'a> {
@@ -35,7 +35,7 @@ impl<'a> Claims<'a> {
         Claims(Map::new(storage_key))
     }
 
-    /// This creates a claim, such that the given address can claim an amount of tokens after
+    /// This creates a storage, such that the given address can storage an amount of tokens after
     /// the release date.
     pub fn create_claim(
         &self,
@@ -44,7 +44,7 @@ impl<'a> Claims<'a> {
         amount: Uint128,
         release_at: Expiration,
     ) -> StdResult<()> {
-        // add a claim to this user to get their tokens after the unbonding period
+        // add a storage to this user to get their tokens after the unbonding period
         self.0.update(storage, addr, |old| -> StdResult<_> {
             let mut claims = old.unwrap_or_default();
             claims.push(Claim { amount, release_at });

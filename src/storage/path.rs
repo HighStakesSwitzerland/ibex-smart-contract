@@ -2,8 +2,8 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::marker::PhantomData;
 
-use crate::claim::helpers::{may_deserialize, must_deserialize, nested_namespaces_with_key};
-use crate::claim::keys::Key;
+use crate::storage::helpers::{may_deserialize, must_deserialize, nested_namespaces_with_key};
+use crate::storage::keys::Key;
 use cosmwasm_std::{to_vec, StdError, StdResult, Storage};
 use std::ops::Deref;
 

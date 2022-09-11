@@ -158,54 +158,24 @@ pub enum ExecuteMsg {
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteAnswer {
     // Native
-    Stake {
-        status: ResponseStatus,
-        amount: Uint128,
-    },
-    Unstake {
-        status: ResponseStatus,
-        amount: Uint128,
-    },
+    Stake { status: ResponseStatus },
+    Unstake { status: ResponseStatus },
 
     // Base
-    Transfer {
-        status: ResponseStatus,
-    },
-    Send {
-        status: ResponseStatus,
-    },
-    BatchSend {
-        status: ResponseStatus,
-    },
-    RegisterReceive {
-        status: ResponseStatus,
-    },
-    CreateViewingKey {
-        key: ViewingKeyObj,
-    },
-    SetViewingKey {
-        status: ResponseStatus,
-    },
-    TransferFrom {
-        status: ResponseStatus,
-    },
-    SendFrom {
-        status: ResponseStatus,
-    },
-    BatchTransferFrom {
-        status: ResponseStatus,
-    },
-    BatchSendFrom {
-        status: ResponseStatus,
-    },
+    Transfer { status: ResponseStatus },
+    Send { status: ResponseStatus },
+    BatchSend { status: ResponseStatus },
+    RegisterReceive { status: ResponseStatus },
+    CreateViewingKey { key: ViewingKeyObj },
+    SetViewingKey { status: ResponseStatus },
+    TransferFrom { status: ResponseStatus },
+    SendFrom { status: ResponseStatus },
+    BatchTransferFrom { status: ResponseStatus },
+    BatchSendFrom { status: ResponseStatus },
 
     // Other
-    ChangeAdmin {
-        status: ResponseStatus,
-    },
-    SetContractStatus {
-        status: ResponseStatus,
-    },
+    ChangeAdmin { status: ResponseStatus },
+    SetContractStatus { status: ResponseStatus },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]

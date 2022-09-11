@@ -59,9 +59,16 @@ pub fn instantiate(
             BalancesStore::save(deps.storage, &balance.address, amount)?;
 
             let staked_amount = balance.staked_amount.u128();
-            StakedBalancesStore::save(deps.storage, &balance.address, amount)?;
+            StakedBalancesStore::save(deps.storage, &balance.address, staked_amount)?;
 
-            if let Some(new_total_supply) = total_supply.checked_add(amount + staked_amount) {
+            if let Some(new_total_supply) = total_supply.checked_add(amount) {
+                total_supply = new_total_supply;
+            } else {
+                return Err(StdError::generic_err(
+                    "The sum of all initial balances exceeds the maximum possible total supply",
+                ));
+            }
+            if let Some(new_total_supply) = total_supply.checked_add(staked_amount) {
                 total_supply = new_total_supply;
             } else {
                 return Err(StdError::generic_err(
@@ -407,7 +414,7 @@ fn try_stake(
     }
 
     // update the sender's staked balance
-    let staked_balance = BalancesStore::load(deps.storage, &info.sender);
+    let staked_balance = StakedBalancesStore::load(deps.storage, &info.sender);
     let new_staked_balance = dbg!(staked_balance.checked_add(amount_to_stake.u128()));
     if new_staked_balance.is_some() {
         StakedBalancesStore::save(deps.storage, &info.sender, new_staked_balance.unwrap())?;
@@ -422,14 +429,11 @@ fn try_stake(
         deps.storage,
         &sender_address,
         amount_to_stake,
-        "ibex".to_string(),
+        constants.symbol,
         &env.block,
     )?;
 
-    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Stake {
-        status: Success,
-        amount: Uint128::new(new_staked_balance.unwrap()),
-    })?))
+    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Stake { status: Success })?))
 }
 
 fn try_unstake(
@@ -448,15 +452,15 @@ fn try_unstake(
     let sender_address = deps.api.addr_canonicalize(info.sender.as_str())?;
     let amount_raw = amount.u128();
 
-    let staked_balances = StakedBalancesStore::load(deps.storage, &info.sender);
-    let new_staked_balance = staked_balances.checked_sub(amount_raw);
+    let staked_balances = dbg!(StakedBalancesStore::load(deps.storage, &info.sender));
+    let new_staked_balance = dbg!(staked_balances.checked_sub(amount_raw));
 
     // reduce staked balance
     if new_staked_balance.is_some() {
         StakedBalancesStore::save(deps.storage, &info.sender, new_staked_balance.unwrap())?;
     } else {
         return Err(StdError::generic_err(format!(
-            "Insufficient funds to unstake: balance={}, required={}",
+            "Insufficient funds to unstake: balance={}, wanted={}",
             staked_balances, amount_raw
         )));
     }
@@ -476,10 +480,7 @@ fn try_unstake(
         &env.block,
     )?;
 
-    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Unstake {
-        status: Success,
-        amount: Uint128::new(new_staked_balance.unwrap()),
-    })?))
+    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Unstake { status: Success })?))
 }
 
 fn try_transfer_impl(
@@ -890,13 +891,9 @@ fn is_valid_symbol(symbol: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::expiration::Duration;
+    use crate::claim::expiration::Duration;
     use cosmwasm_std::testing::*;
-    use cosmwasm_std::{
-        from_binary, BlockInfo, Coin, ContractInfo, MessageInfo, OwnedDeps, QueryResponse, ReplyOn,
-        SubMsg, Timestamp, TransactionInfo, WasmMsg,
-    };
-    use expiration::Duration;
+    use cosmwasm_std::{from_binary, Coin, OwnedDeps, QueryResponse, ReplyOn, SubMsg, WasmMsg};
     use std::any::Any;
 
     use crate::msg::ResponseStatus;
@@ -960,7 +957,7 @@ mod tests {
         ))
         .unwrap();
         let init_msg = InstantiateMsg {
-            name: "ibex".to_string(),
+            name: "sibex".to_string(),
             admin: Some(Addr::unchecked("admin".to_string())),
             symbol: "IBEX".to_string(),
             decimals: 8,
@@ -994,20 +991,20 @@ mod tests {
         let handle_result: ExecuteAnswer = from_binary(&handle_result.data.unwrap()).unwrap();
 
         match handle_result {
-            HandleAnswer::Stake { status }
-            | HandleAnswer::Unstake { status }
-            | HandleAnswer::Transfer { status }
-            | HandleAnswer::Send { status }
-            | HandleAnswer::RegisterReceive { status }
-            | HandleAnswer::SetViewingKey { status }
-            | HandleAnswer::TransferFrom { status }
-            | HandleAnswer::SendFrom { status }
-            | HandleAnswer::ChangeAdmin { status }
-            | HandleAnswer::SetContractStatus { status } => {
+            ExecuteAnswer::Stake { status }
+            | ExecuteAnswer::Unstake { status }
+            | ExecuteAnswer::Transfer { status }
+            | ExecuteAnswer::Send { status }
+            | ExecuteAnswer::RegisterReceive { status }
+            | ExecuteAnswer::SetViewingKey { status }
+            | ExecuteAnswer::TransferFrom { status }
+            | ExecuteAnswer::SendFrom { status }
+            | ExecuteAnswer::ChangeAdmin { status }
+            | ExecuteAnswer::SetContractStatus { status } => {
                 matches!(status, ResponseStatus::Success { .. })
             }
             _ => panic!(
-                "HandleAnswer not supported for success extraction: {:?}",
+                "ExecuteAnswer not supported for success extraction: {:?}",
                 handle_result
             ),
         }
@@ -1025,7 +1022,7 @@ mod tests {
         assert_eq!(init_result.unwrap(), Response::default());
 
         let constants = Constants::load(&deps.storage).unwrap();
-        assert_eq!(TotalSupplyStore::load(&deps.storage).unwrap(), 5000);
+        assert_eq!(TotalSupplyStore::load(&deps.storage).unwrap(), 20000);
         assert_eq!(
             ContractStatusStore::load(&deps.storage).unwrap(),
             ContractStatusLevel::NormalRun
@@ -1060,7 +1057,7 @@ mod tests {
         assert_eq!(init_result.unwrap(), Response::default());
 
         let constants = Constants::load(&deps.storage).unwrap();
-        assert_eq!(TotalSupplyStore::load(&deps.storage).unwrap(), 5000);
+        assert_eq!(TotalSupplyStore::load(&deps.storage).unwrap(), 20000);
         assert_eq!(
             ContractStatusStore::load(&deps.storage).unwrap(),
             ContractStatusLevel::NormalRun
@@ -1087,7 +1084,7 @@ mod tests {
         let (init_result, _deps) = init_helper(vec![InitialBalance {
             address: Addr::unchecked("lebron".to_string()),
             amount: Uint128::new(u128::MAX),
-            staked_amount: Uint128::new(u128::MAX),
+            staked_amount: Uint128::new(0),
         }]);
         assert!(
             init_result.is_ok(),
@@ -1119,7 +1116,7 @@ mod tests {
     #[test]
     fn test_handle_transfer() {
         let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: HumanAddr("bob".to_string()),
+            address: Addr::unchecked("bob".to_string()),
             amount: Uint128::new(5000),
             staked_amount: Uint128::new(15000),
         }]);
@@ -1572,11 +1569,9 @@ mod tests {
             "Init failed: {}",
             init_result_for_failure.err().unwrap()
         );
-        // test when redeem disabled
-        let handle_msg = ExecuteMsg::Redeem {
+        // test when unstake disabled
+        let handle_msg = ExecuteMsg::Unstake {
             amount: Uint128::new(1000),
-            denom: None,
-            padding: None,
         };
         let info = mock_info("butler", &[]);
 
@@ -1585,19 +1580,19 @@ mod tests {
         let error = extract_error_msg(handle_result);
         assert!(error.contains("Unstake functionality is not enabled for this token."));
 
+        // test when unstake enabled
         // try to unstake when contract has 0 balance
         let handle_msg = ExecuteMsg::Unstake {
-            amount: Uint128::new(1000),
+            amount: Uint128::new(1000000),
         };
         let info = mock_info("butler", &[]);
 
         let handle_result = execute(deps_no_reserve.as_mut(), mock_env(), info, handle_msg);
 
         let error = extract_error_msg(handle_result);
-        assert!(error.contains(
-            "You are trying to unstake for more IBEX than the token has in its stake reserve."
-        ));
+        assert!(error.contains("Insufficient funds to unstake: balance=15000, wanted=1000000"));
 
+        // unstale 1000
         let handle_msg = ExecuteMsg::Unstake {
             amount: Uint128::new(1000),
         };
@@ -1612,7 +1607,8 @@ mod tests {
         );
 
         let canonical = Addr::unchecked("butler".to_string());
-        assert_eq!(BalancesStore::load(&deps.storage, &canonical), 4000)
+        assert_eq!(StakedBalancesStore::load(&deps.storage, &canonical), 14000);
+        assert_eq!(BalancesStore::load(&deps.storage, &canonical), 6000);
     }
 
     #[test]
@@ -1635,8 +1631,8 @@ mod tests {
 
         let (init_result_for_failure, mut deps_for_failure) = init_helper(vec![InitialBalance {
             address: Addr::unchecked("lebron".to_string()),
-            staked_amount: Uint128::new(15000),
             amount: Uint128::new(5000),
+            staked_amount: Uint128::new(15000),
         }]);
         assert!(
             init_result_for_failure.is_ok(),
@@ -1651,8 +1647,9 @@ mod tests {
 
         let handle_result = execute(deps_for_failure.as_mut(), mock_env(), info, handle_msg);
         let error = extract_error_msg(handle_result);
-        assert!(error.contains("Deposit functionality is not enabled for this token."));
+        assert!(error.contains("Stake functionality is not enabled for this token."));
 
+        // test when stake enabled
         let handle_msg = ExecuteMsg::Stake {
             amount: Uint128::new(1000),
         };
@@ -1666,16 +1663,9 @@ mod tests {
         );
 
         let canonical = Addr::unchecked("lebron".to_string());
-        assert_eq!(BalancesStore::load(&deps.storage, &canonical), 6000);
+        assert_eq!(BalancesStore::load(&deps.storage, &canonical), 4000);
 
-        assert_eq!(
-            ReadonlyStakedBalances::load(&deps.storage, &canonical),
-            6000
-        );
-        assert_eq!(
-            ReadonlyStakedBalances::load(&deps.storage, &canonical),
-            16000
-        );
+        assert_eq!(StakedBalancesStore::load(&deps.storage, &canonical), 16000);
     }
 
     #[test]
@@ -1698,34 +1688,12 @@ mod tests {
         );
 
         let pause_msg = ExecuteMsg::SetContractStatus {
-            level: ContractStatusLevel::StopAllButRedeems,
+            level: ContractStatusLevel::StopAllButUnstake,
             padding: None,
         };
         let info = mock_info("not_admin", &[]);
 
         let handle_result = execute(deps.as_mut(), mock_env(), info, pause_msg);
-
-        let error = extract_error_msg(handle_result);
-        assert!(error.contains(&admin_err.clone()));
-
-        let mint_msg = ExecuteMsg::AddMinters {
-            minters: vec![Addr::unchecked("not_admin".to_string())],
-            padding: None,
-        };
-        let info = mock_info("not_admin", &[]);
-
-        let handle_result = execute(deps.as_mut(), mock_env(), info, mint_msg);
-
-        let error = extract_error_msg(handle_result);
-        assert!(error.contains(&admin_err.clone()));
-
-        let mint_msg = ExecuteMsg::RemoveMinters {
-            minters: vec![Addr::unchecked("admin".to_string())],
-            padding: None,
-        };
-        let info = mock_info("not_admin", &[]);
-
-        let handle_result = execute(deps.as_mut(), mock_env(), info, mint_msg);
 
         let error = extract_error_msg(handle_result);
         assert!(error.contains(&admin_err.clone()));
@@ -1761,7 +1729,7 @@ mod tests {
         );
 
         let pause_msg = ExecuteMsg::SetContractStatus {
-            level: ContractStatusLevel::StopAllButRedeems,
+            level: ContractStatusLevel::StopAllButUnstake,
             padding: None,
         };
 
@@ -1930,7 +1898,7 @@ mod tests {
     #[test]
     fn test_query_token_info() {
         let init_name = "sibex".to_string();
-        let init_admin = HumanAddr("admin".to_string());
+        let init_admin = Addr::unchecked("admin".to_string());
         let init_symbol = "IBEX".to_string();
         let init_decimals = 8;
         let init_config: InitConfig = from_binary(&Binary::from(
@@ -1989,7 +1957,7 @@ mod tests {
     #[test]
     fn test_query_token_config() {
         let init_name = "sibex".to_string();
-        let init_admin = HumanAddr("admin".to_string());
+        let init_admin = Addr::unchecked("admin".to_string());
         let init_symbol = "IBEX".to_string();
         let init_decimals = 8;
         let init_config: InitConfig = from_binary(&Binary::from(
@@ -2037,12 +2005,13 @@ mod tests {
         );
         let query_answer: QueryAnswer = from_binary(&query_result.unwrap()).unwrap();
         let unbond_period = Duration::Time(60);
+        let min_stake_amount = Uint128::new(1);
         match query_answer {
             QueryAnswer::TokenConfig {
                 public_total_supply,
                 staking_enabled,
                 unstaking_enabled,
-                min_stake_amount: Uint128::new(1),
+                min_stake_amount,
                 unbonding_period: unbond_period,
             } => {
                 assert_eq!(public_total_supply, true);
@@ -2247,25 +2216,8 @@ mod tests {
 
         assert!(ensure_success(handle_result.unwrap()));
 
-        let handle_msg = ExecuteMsg::Burn {
-            amount: Uint128::new(1),
-            memo: Some("my burn message".to_string()),
-            padding: None,
-        };
-        let info = mock_info("bob", &[]);
-
-        let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
-
-        assert!(
-            handle_result.is_ok(),
-            "Pause handle failed: {}",
-            handle_result.err().unwrap()
-        );
-
-        let handle_msg = ExecuteMsg::Redeem {
+        let handle_msg = ExecuteMsg::Unstake {
             amount: Uint128::new(1000),
-            denom: None,
-            padding: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -2277,17 +2229,18 @@ mod tests {
             handle_result.err().unwrap()
         );
 
-        let handle_msg = ExecuteMsg::Mint {
-            recipient: Addr::unchecked("bob".to_string()),
-            amount: Uint128::new(100),
-            memo: Some("my mint message".to_string()),
-            padding: None,
+        let handle_msg = ExecuteMsg::Stake {
+            amount: Uint128::new(1000),
         };
-        let info = mock_info("admin", &[]);
+        let info = mock_info("bob", &[]);
 
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
 
-        assert!(ensure_success(handle_result.unwrap()));
+        assert!(
+            handle_result.is_ok(),
+            "handle() failed: {}",
+            handle_result.err().unwrap()
+        );
 
         let handle_msg = ExecuteMsg::Transfer {
             recipient: Addr::unchecked("alice".to_string()),
@@ -2404,7 +2357,7 @@ mod tests {
                 id: 2,
                 action: TxAction::Stake {},
                 coins: Coin {
-                    denom: "sibex".to_string(),
+                    denom: "IBEX".to_string(),
                     amount: Uint128::new(1000),
                 },
                 memo: None,

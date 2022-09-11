@@ -83,7 +83,9 @@ impl PartialOrd for Expiration {
 
 #[allow(dead_code)]
 pub const HOUR: Duration = Duration::Time(60 * 60);
+#[allow(dead_code)]
 pub const DAY: Duration = Duration::Time(24 * 60 * 60);
+#[allow(dead_code)]
 pub const WEEK: Duration = Duration::Time(7 * 24 * 60 * 60);
 
 /// Duration is a delta of time. You can add it to a BlockInfo or Expiration to
@@ -144,97 +146,5 @@ impl Mul<u64> for Duration {
             Duration::Time(t) => Duration::Time(t * rhs),
             Duration::Height(h) => Duration::Height(h * rhs),
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn compare_expiration() {
-        // matching pairs
-        assert!(Expiration::AtHeight(5) < Expiration::AtHeight(10));
-        assert!(Expiration::AtHeight(8) > Expiration::AtHeight(7));
-        assert!(
-            Expiration::AtTime(Timestamp::from_seconds(555))
-                < Expiration::AtTime(Timestamp::from_seconds(777))
-        );
-        assert!(
-            Expiration::AtTime(Timestamp::from_seconds(86))
-                < Expiration::AtTime(Timestamp::from_seconds(100))
-        );
-
-        // never as infinity
-        assert!(Expiration::AtHeight(500000) < Expiration::Never {});
-        assert!(Expiration::Never {} > Expiration::AtTime(Timestamp::from_seconds(500000)));
-
-        // what happens for the uncomparables?? all compares are false
-        assert_eq!(
-            None,
-            Expiration::AtTime(Timestamp::from_seconds(1000))
-                .partial_cmp(&Expiration::AtHeight(230))
-        );
-        assert_eq!(
-            Expiration::AtTime(Timestamp::from_seconds(1000))
-                .partial_cmp(&Expiration::AtHeight(230)),
-            None
-        );
-        assert_eq!(
-            Expiration::AtTime(Timestamp::from_seconds(1000))
-                .partial_cmp(&Expiration::AtHeight(230)),
-            None
-        );
-        assert!(!(Expiration::AtTime(Timestamp::from_seconds(1000)) == Expiration::AtHeight(230)));
-    }
-
-    #[test]
-    fn expiration_addition() {
-        // height
-        let end = Expiration::AtHeight(12345) + Duration::Height(400);
-        assert_eq!(end.unwrap(), Expiration::AtHeight(12745));
-
-        // time
-        let end = Expiration::AtTime(Timestamp::from_seconds(55544433)) + Duration::Time(40300);
-        assert_eq!(
-            end.unwrap(),
-            Expiration::AtTime(Timestamp::from_seconds(55584733))
-        );
-
-        // never
-        let end = Expiration::Never {} + Duration::Time(40300);
-        assert_eq!(end.unwrap(), Expiration::Never {});
-
-        // mismatched
-        let end = Expiration::AtHeight(12345) + Duration::Time(1500);
-        end.unwrap_err();
-
-        // // not possible other way
-        // let end = Duration::Time(1000) + Expiration::AtTime(50000);
-        // assert_eq!(end.unwrap(), Expiration::AtTime(51000));
-    }
-
-    #[test]
-    fn block_plus_duration() {
-        let block = BlockInfo {
-            height: 1000,
-            time: Timestamp::from_seconds(7777),
-            chain_id: "foo".to_string(),
-        };
-
-        let end = Duration::Height(456).after(&block);
-        assert_eq!(Expiration::AtHeight(1456), end);
-
-        let end = Duration::Time(1212).after(&block);
-        assert_eq!(Expiration::AtTime(Timestamp::from_seconds(8989)), end);
-    }
-
-    #[test]
-    fn duration_math() {
-        let long = (Duration::Height(444) + Duration::Height(555)).unwrap();
-        assert_eq!(Duration::Height(999), long);
-
-        let days = DAY * 3;
-        assert_eq!(Duration::Time(3 * 24 * 60 * 60), days);
     }
 }

@@ -1,4 +1,7 @@
 node_modules
+artifacts
+ibex-smart-contract_cache
+
 # Build results
 /target
 contract.wasm

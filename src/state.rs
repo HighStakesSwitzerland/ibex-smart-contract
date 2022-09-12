@@ -46,7 +46,7 @@ pub struct Constants {
     // the address of this contract, used to validate query permits
     pub contract_address: Addr,
 }
-pub static CONSTANTS: Item<Constants> = Item::new(KEY_CONSTANTS);
+pub static CONSTANTS: Item<Constants, Json> = Item::new(KEY_CONSTANTS);
 
 impl Constants {
     pub fn load(store: &dyn Storage) -> StdResult<Constants> {
@@ -60,7 +60,7 @@ impl Constants {
     }
 }
 
-pub static TOTAL_SUPPLY: Item<u128> = Item::new(KEY_TOTAL_SUPPLY);
+pub static TOTAL_SUPPLY: Item<u128, Json> = Item::new(KEY_TOTAL_SUPPLY);
 pub struct TotalSupplyStore {}
 impl TotalSupplyStore {
     pub fn load(store: &dyn Storage) -> StdResult<u128> {
@@ -88,7 +88,7 @@ impl ContractStatusStore {
     }
 }
 
-pub static TX_COUNT: Item<u64> = Item::new(KEY_TX_COUNT);
+pub static TX_COUNT: Item<u64, Json> = Item::new(KEY_TX_COUNT);
 pub struct TxCountStore {}
 impl TxCountStore {
     pub fn load(store: &dyn Storage) -> u64 {

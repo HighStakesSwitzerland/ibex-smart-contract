@@ -25,25 +25,19 @@ incremental = false
 overflow-checks = true
 
 [features]
-# for quicker tests, cargo test --lib
-# for more explicit tests, cargo test --features=backtraces
-#default = ["debug-print"]
-backtraces = ["cosmwasm-std/backtraces"]
+backtraces = []
 
-# debug-print = ["cosmwasm-std/debug-print"]
 [dependencies]
 cosmwasm-std = { git = "https://github.com/scrtlabs/cosmwasm", branch = "secret" }
 cosmwasm-storage = { git = "https://github.com/scrtlabs/cosmwasm", branch = "secret" }
-cw-utils = "0.13.2"
 secret-toolkit = { git = "https://github.com/scrtlabs/secret-toolkit", branch = "cosmwasm-v1.0", features = [
-  "permit",
   "viewing-key",
   "crypto",
 ] }
+cw-utils = "0.13.2"
 schemars = "0.8.1"
 serde = { version = "1.0.114", default-features = false, features = ["derive"] }
 snafu = { version = "0.6.3" }
-bincode2 = "2.0.1"
 subtle = { version = "2.2.3", default-features = false }
 base64 = "0.13.0"
 rand_chacha = { version = "0.3.1", default-features = false }

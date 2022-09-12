@@ -27,12 +27,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea2b2456fd614d856680dcd9fcc660a51a820fa09daef2e49772b56a193c8474"
 
 [[package]]
-name = "bech32"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf9ff0bbfd639f15c74af777d81383cf53efb7c93613f6cab67c6c11e05bbf8b"
-
-[[package]]
 name = "bincode2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -423,7 +417,6 @@ name = "ibex-smart-contract"
 version = "1.0.0"
 dependencies = [
  "base64 0.13.0",
- "bincode2",
  "cosmwasm-schema",
  "cosmwasm-std 1.0.0 (git+https://github.com/scrtlabs/cosmwasm?branch=secret)",
  "cosmwasm-storage",
@@ -543,17 +536,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "remain"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06df529c0d271b27ac4a2c260f5ce2914b60bd44702cecec7b9f271adbdde23b"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "rfc6979"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -562,17 +544,6 @@ dependencies = [
  "crypto-bigint",
  "hmac",
  "zeroize",
-]
-
-[[package]]
-name = "ripemd160"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2eca4ecc81b7f313189bf73ce724400a07da2a6dac19588b03c8bd76a2dcc251"
-dependencies = [
- "block-buffer 0.9.0",
- "digest 0.9.0",
- "opaque-debug",
 ]
 
 [[package]]
@@ -647,7 +618,6 @@ version = "0.4.0"
 source = "git+https://github.com/scrtlabs/secret-toolkit?branch=cosmwasm-v1.0#08f60c9396d112b6657f90139179b7d0aa756623"
 dependencies = [
  "secret-toolkit-crypto",
- "secret-toolkit-permit",
  "secret-toolkit-serialization",
  "secret-toolkit-snip20",
  "secret-toolkit-snip721",
@@ -665,20 +635,6 @@ dependencies = [
  "rand_chacha 0.2.2",
  "rand_core 0.5.1",
  "sha2 0.9.9",
-]
-
-[[package]]
-name = "secret-toolkit-permit"
-version = "0.3.1"
-source = "git+https://github.com/scrtlabs/secret-toolkit?branch=cosmwasm-v1.0#08f60c9396d112b6657f90139179b7d0aa756623"
-dependencies = [
- "bech32",
- "cosmwasm-std 1.0.0 (git+https://github.com/scrtlabs/cosmwasm?branch=secret)",
- "remain",
- "ripemd160",
- "schemars 0.8.10",
- "secret-toolkit-crypto",
- "serde",
 ]
 
 [[package]]

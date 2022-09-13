@@ -42,9 +42,8 @@ impl InstantiateMsg {
 pub struct InitConfig {
     min_stake_amount: Option<u128>,
     /// Unbonding period. Pass json "height: 1234" or "time: 60" instead of 'unbonding_period: xxx' key
-    unbonding_period: Option<Duration>
+    unbonding_period: Option<Duration>,
 }
-
 
 impl InitConfig {
     pub fn min_staked_amount(&self) -> Uint128 {
@@ -53,7 +52,7 @@ impl InitConfig {
 
     pub fn unbonding_period(&self) -> Duration {
         // 7 days unstaking period
-        self.unbonding_period.unwrap_or(WEEK * 7)
+        self.unbonding_period.unwrap_or(Duration::Time(60))
     }
 }
 
@@ -158,6 +157,7 @@ impl QueryMsg {
     pub fn get_validation_params(&self) -> (Vec<&Addr>, ViewingKeyObj) {
         match self {
             Self::Balance { address, key } => (vec![address], ViewingKeyObj(key.clone())),
+            Self::Claim { address, key } => (vec![address], ViewingKeyObj(key.clone())),
             Self::TransferHistory { address, key, .. } => {
                 (vec![address], ViewingKeyObj(key.clone()))
             }

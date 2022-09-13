@@ -1,8 +1,8 @@
 /// This contract implements SNIP-20 standard:
 /// https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response,
-    StdError, StdResult, Storage, Uint128,
+    entry_point, to_binary, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError,
+    StdResult, Storage, Uint128,
 };
 use secret_toolkit::crypto::sha_256;
 use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
@@ -348,7 +348,7 @@ fn try_stake(
     let unstaked_balance = BalancesStore::load(deps.storage, &info.sender);
     let sender_address = deps.api.addr_canonicalize(info.sender.as_str())?;
 
-    if let Some(balance) = dbg!(unstaked_balance.checked_sub(amount_to_stake.u128())) {
+    if let Some(balance) = unstaked_balance.checked_sub(amount_to_stake.u128()) {
         // reduce the sender's unstaked balance
         BalancesStore::save(deps.storage, &info.sender, balance)?;
     } else {
@@ -358,7 +358,7 @@ fn try_stake(
 
     // update the sender's staked balance
     let staked_balance = StakedBalancesStore::load(deps.storage, &info.sender);
-    let new_staked_balance = dbg!(staked_balance.checked_add(amount_to_stake.u128()));
+    let new_staked_balance = staked_balance.checked_add(amount_to_stake.u128());
     if new_staked_balance.is_some() {
         StakedBalancesStore::save(deps.storage, &info.sender, new_staked_balance.unwrap())?;
     } else {
@@ -390,8 +390,8 @@ fn try_unstake(
     let sender_address = deps.api.addr_canonicalize(info.sender.as_str())?;
     let amount_raw = amount.u128();
 
-    let staked_balances = dbg!(StakedBalancesStore::load(deps.storage, &info.sender));
-    let new_staked_balance = dbg!(staked_balances.checked_sub(amount_raw));
+    let staked_balances = StakedBalancesStore::load(deps.storage, &info.sender);
+    let new_staked_balance = staked_balances.checked_sub(amount_raw);
 
     // reduce staked balance
     if new_staked_balance.is_some() {
@@ -422,14 +422,20 @@ fn try_unstake(
 }
 
 fn try_claim(deps: DepsMut, env: Env, info: &MessageInfo) -> StdResult<Response> {
-    let release = dbg!(CLAIMS.claim_tokens(deps.storage, &info.sender, &env.block, None)?);
+    let release = dbg!(CLAIMS.claim_tokens(
+        deps.storage,
+        &info.sender,
+        &env.block,
+        Some(Uint128::new(100000))
+    )?);
 
+    dbg!(release);
     if release.is_zero() {
         return Err(StdError::generic_err("Nothing to claim"));
     }
 
     // update balance
-    let unstaked_balances = dbg!(BalancesStore::load(deps.storage, &info.sender));
+    let unstaked_balances = BalancesStore::load(deps.storage, &info.sender);
     BalancesStore::save(
         deps.storage,
         &info.sender,
@@ -440,6 +446,7 @@ fn try_claim(deps: DepsMut, env: Env, info: &MessageInfo) -> StdResult<Response>
 }
 
 fn query_claim(deps: Deps, account: &Addr) -> StdResult<Binary> {
+    dbg!(account.as_str());
     let claim_result = dbg!(CLAIMS.query_claims(deps, &deps.api.addr_validate(account.as_str())?));
 
     let response = QueryAnswer::Claim {
@@ -618,14 +625,13 @@ fn is_valid_symbol(symbol: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
-
     use cosmwasm_std::testing::*;
     use cosmwasm_std::{from_binary, Coin, OwnedDeps, QueryResponse};
+    use std::any::Any;
 
     use crate::msg::ResponseStatus;
     use crate::msg::{InitConfig, InitialBalance};
-    use crate::storage::claim::Claim;
+    use crate::storage::claim::Claim as ClaimAmount;
     use crate::storage::expiration::{Duration, WEEK};
     use crate::viewing_key_obj::ViewingKeyObj;
 
@@ -679,8 +685,7 @@ mod tests {
             format!(
                 "{{\"min_stake_amount\":\"{}\",
                 \"time\": \"{}\"}}",
-                min_stake_amount,
-                unbonding_period
+                min_stake_amount, unbonding_period
             )
             .as_bytes(),
         ))
@@ -722,6 +727,7 @@ mod tests {
 
         match handle_result {
             ExecuteAnswer::Stake { status }
+            | ExecuteAnswer::Claim { status }
             | ExecuteAnswer::Unstake { status }
             | ExecuteAnswer::Transfer { status }
             | ExecuteAnswer::RegisterReceive { status }
@@ -1093,7 +1099,7 @@ mod tests {
             }],
             Uint128::new(100),
             Duration::Time(60),
-            0
+            0,
         );
         assert!(
             init_result.is_ok(),
@@ -1109,7 +1115,7 @@ mod tests {
             }],
             Uint128::new(100),
             Duration::Time(60),
-            0
+            0,
         );
         assert!(
             init_result_no_reserve.is_ok(),
@@ -1151,14 +1157,14 @@ mod tests {
         let expires = constants.unbonding_period.after(&mock_env().block);
         let info = mock_info("butler", &[]);
 
-        let claim_response = CLAIMS.query_claims(deps.as_ref(), &info.sender);
+        let claim_response = dbg!(CLAIMS.query_claims(deps.as_ref(), &info.sender));
         assert!(
             claim_response.is_ok(),
             "Init failed: {}",
             claim_response.err().unwrap()
         );
         let claim_response = claim_response.unwrap();
-        assert_eq!(claim_response.claims, vec![Claim::new(1000, expires)]);
+        assert_eq!(claim_response.claims, vec![ClaimAmount::new(1000, expires)]);
     }
 
     #[test]
@@ -1226,23 +1232,54 @@ mod tests {
             "Init failed: {}",
             claim_response.err().unwrap()
         );
-        let claim_response = dbg!(claim_response.unwrap());
-        assert_eq!(claim_response.claims, vec![Claim::new(1000, expires)]);
+        let claim_response = claim_response.unwrap();
+        assert_eq!(claim_response.claims, vec![ClaimAmount::new(1000, expires)]);
+
+        // query claims
+        // create viewing key first
+        let create_vk_msg = ExecuteMsg::CreateViewingKey {
+            entropy: "34".to_string(),
+            padding: None,
+        };
+        let info = mock_info("lebron", &[]);
+        let handle_response = execute(deps.as_mut(), mock_env(), info, create_vk_msg).unwrap();
+        let vk = match from_binary(&handle_response.data.unwrap()).unwrap() {
+            ExecuteAnswer::CreateViewingKey { key } => key,
+            _ => panic!("Unexpected result from handle"),
+        };
+        let info = mock_info("lebron", &[]);
+        // query claim
+        let query_claim_msg = QueryMsg::Claim {
+            address: info.sender,
+            key: vk.0,
+        };
+        let query_response = query(deps.as_ref(), mock_env(), query_claim_msg).unwrap();
+        let claims = match from_binary(&query_response).unwrap() {
+            QueryAnswer::Claim { amounts, .. } => amounts,
+            _ => panic!("Unexpected result from claim query"),
+        };
+        let constants = Constants::load(&deps.storage).unwrap();
+        let expires = constants.unbonding_period.after(&mock_env().block);
+
+        assert_eq!(
+            claims,
+            vec![ClaimAmount {
+                amount: Uint128::new(1000),
+                release_at: expires,
+            }]
+        );
+        assert_eq!(BalancesStore::load(&deps.storage, &canonical), 4000);
+        assert_eq!(StakedBalancesStore::load(&deps.storage, &canonical), 0);
 
         // wait for height to unstake
-        env.block.time = env.block.time.plus_nanos(10000000000000000);
+        env.block.time = env.block.time.plus_seconds(10000000); // no idea how to convert constants.unbonding_period to seconds
 
-        dbg!(env.block.time);
-        // check claims
+        // execute claims
         let handle_msg = ExecuteMsg::Claim {};
         let info = mock_info("lebron", &[]);
-        let handle_result = dbg!(execute(deps.as_mut(), env.clone(), info, handle_msg));
+        let handle_response = execute(deps.as_mut(), env.clone(), info, handle_msg);
 
-        assert!(
-            handle_result.is_ok(),
-            "handle() failed: {}",
-            handle_result.err().unwrap()
-        );
+        assert!(ensure_success(handle_response.unwrap()));
         assert_eq!(BalancesStore::load(&deps.storage, &canonical), 5000);
         assert_eq!(StakedBalancesStore::load(&deps.storage, &canonical), 0);
     }
@@ -1567,10 +1604,7 @@ mod tests {
         let init_decimals = 8;
         let min_stake_amount = 10;
         let init_config: InitConfig = from_binary(&Binary::from(
-            format!(
-                "{{\"min_stake_amount\":\"{}\"}}", min_stake_amount
-            )
-            .as_bytes(),
+            format!("{{\"min_stake_amount\":\"{}\"}}", min_stake_amount).as_bytes(),
         ))
         .unwrap();
 

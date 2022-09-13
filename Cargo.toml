@@ -34,10 +34,10 @@ secret-toolkit = { git = "https://github.com/scrtlabs/secret-toolkit", branch = 
   "viewing-key",
   "crypto",
 ] }
-cw-utils = "0.13.2"
+cw-utils = "0.14.0"
 schemars = "0.8.1"
 serde = { version = "1.0.114", default-features = false, features = ["derive"] }
-snafu = { version = "0.6.3" }
+snafu = { version = "0.7.1" }
 subtle = { version = "2.2.3", default-features = false }
 base64 = "0.13.0"
 rand_chacha = { version = "0.3.1", default-features = false }

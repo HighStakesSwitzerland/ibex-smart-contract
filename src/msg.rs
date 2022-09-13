@@ -96,22 +96,6 @@ pub enum ExecuteMsg {
         memo: Option<String>,
         padding: Option<String>,
     },
-    Send {
-        recipient: Addr,
-        recipient_code_hash: Option<String>,
-        amount: Uint128,
-        msg: Option<Binary>,
-        memo: Option<String>,
-        padding: Option<String>,
-    },
-    BatchSend {
-        actions: Vec<batch::SendAction>,
-        padding: Option<String>,
-    },
-    RegisterReceive {
-        code_hash: String,
-        padding: Option<String>,
-    },
     CreateViewingKey {
         entropy: String,
         padding: Option<String>,
@@ -127,21 +111,8 @@ pub enum ExecuteMsg {
         memo: Option<String>,
         padding: Option<String>,
     },
-    SendFrom {
-        owner: Addr,
-        recipient: Addr,
-        recipient_code_hash: Option<String>,
-        amount: Uint128,
-        msg: Option<Binary>,
-        memo: Option<String>,
-        padding: Option<String>,
-    },
     BatchTransferFrom {
         actions: Vec<batch::TransferFromAction>,
-        padding: Option<String>,
-    },
-    BatchSendFrom {
-        actions: Vec<batch::SendFromAction>,
         padding: Option<String>,
     },
 
@@ -165,15 +136,11 @@ pub enum ExecuteAnswer {
     Claim { status: ResponseStatus },
     // Base
     Transfer { status: ResponseStatus },
-    Send { status: ResponseStatus },
-    BatchSend { status: ResponseStatus },
     RegisterReceive { status: ResponseStatus },
     CreateViewingKey { key: ViewingKeyObj },
     SetViewingKey { status: ResponseStatus },
     TransferFrom { status: ResponseStatus },
-    SendFrom { status: ResponseStatus },
     BatchTransferFrom { status: ResponseStatus },
-    BatchSendFrom { status: ResponseStatus },
 
     // Other
     ChangeAdmin { status: ResponseStatus },

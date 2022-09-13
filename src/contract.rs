@@ -1,7 +1,7 @@
 /// This contract implements SNIP-20 standard:
 /// https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, Binary, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response,
+    entry_point, to_binary, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response,
     StdError, StdResult, Storage, Uint128,
 };
 use secret_toolkit::crypto::sha_256;
@@ -12,10 +12,8 @@ use crate::msg::{
     space_pad, ContractStatusLevel, ExecuteAnswer, ExecuteMsg, InstantiateMsg, QueryAnswer,
     QueryMsg, ResponseStatus::Success,
 };
-use crate::receiver::Snip20ReceiveMsg;
 use crate::state::{
-    get_receiver_hash, set_receiver_hash, BalancesStore, Constants, ContractStatusStore,
-    StakedBalancesStore, TotalSupplyStore, CLAIMS,
+    BalancesStore, Constants, ContractStatusStore, StakedBalancesStore, TotalSupplyStore, CLAIMS,
 };
 use crate::transaction_history::{
     store_stake_in_history, store_transfer_in_history, store_unstake_in_history,
@@ -149,27 +147,6 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             memo,
             ..
         } => try_transfer(deps, env, &info, recipient, amount, memo),
-        ExecuteMsg::Send {
-            recipient,
-            recipient_code_hash,
-            amount,
-            msg,
-            memo,
-            ..
-        } => try_send(
-            deps,
-            env,
-            &info,
-            recipient,
-            recipient_code_hash,
-            amount,
-            memo,
-            msg,
-        ),
-        ExecuteMsg::BatchSend { actions, .. } => try_batch_send(deps, env, &info, actions),
-        ExecuteMsg::RegisterReceive { code_hash, .. } => {
-            try_register_receive(deps, &info, code_hash)
-        }
         ExecuteMsg::CreateViewingKey { entropy, .. } => try_create_key(deps, env, &info, entropy),
         ExecuteMsg::SetViewingKey { key, .. } => try_set_key(deps, &info, key),
         ExecuteMsg::TransferFrom {
@@ -179,29 +156,9 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             memo,
             ..
         } => try_transfer_from(deps, &env, &info, &owner, &recipient, amount, memo),
-        ExecuteMsg::SendFrom {
-            owner,
-            recipient,
-            recipient_code_hash,
-            amount,
-            msg,
-            memo,
-            ..
-        } => try_send_from(
-            deps,
-            env,
-            &info,
-            owner,
-            recipient,
-            recipient_code_hash,
-            amount,
-            memo,
-            msg,
-        ),
         ExecuteMsg::BatchTransferFrom { actions, .. } => {
             try_batch_transfer_from(deps, &env, &info, actions)
         }
-        ExecuteMsg::BatchSendFrom { actions, .. } => try_batch_send_from(deps, env, &info, actions),
 
         // Other
         ExecuteMsg::ChangeAdmin { address, .. } => change_admin(deps, &info, address),
@@ -560,134 +517,6 @@ fn try_transfer(
     Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Transfer { status: Success })?))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn try_add_receiver_api_callback(
-    storage: &dyn Storage,
-    messages: &mut Vec<CosmosMsg>,
-    recipient: Addr,
-    recipient_code_hash: Option<String>,
-    msg: Option<Binary>,
-    sender: Addr,
-    from: Addr,
-    amount: Uint128,
-    memo: Option<String>,
-) -> StdResult<()> {
-    if let Some(receiver_hash) = recipient_code_hash {
-        let receiver_msg = Snip20ReceiveMsg::new(sender, from, amount, memo, msg);
-        let callback_msg = receiver_msg.into_cosmos_msg(receiver_hash, recipient)?;
-
-        messages.push(callback_msg);
-        return Ok(());
-    }
-
-    let receiver_hash = get_receiver_hash(storage, &recipient);
-    if let Some(receiver_hash) = receiver_hash {
-        let receiver_hash = receiver_hash?;
-        let receiver_msg = Snip20ReceiveMsg::new(sender, from, amount, memo, msg);
-        let callback_msg = receiver_msg.into_cosmos_msg(receiver_hash, recipient)?;
-
-        messages.push(callback_msg);
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn try_send_impl(
-    deps: &mut DepsMut,
-    messages: &mut Vec<CosmosMsg>,
-    sender: Addr,
-    recipient: Addr,
-    recipient_code_hash: Option<String>,
-    amount: Uint128,
-    memo: Option<String>,
-    msg: Option<Binary>,
-    block: &cosmwasm_std::BlockInfo,
-) -> StdResult<()> {
-    try_transfer_impl(deps, &sender, &recipient, amount, memo.clone(), block)?;
-
-    try_add_receiver_api_callback(
-        deps.storage,
-        messages,
-        recipient,
-        recipient_code_hash,
-        msg,
-        sender.clone(),
-        sender,
-        amount,
-        memo,
-    )?;
-
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn try_send(
-    mut deps: DepsMut,
-    env: Env,
-    info: &MessageInfo,
-    recipient: Addr,
-    recipient_code_hash: Option<String>,
-    amount: Uint128,
-    memo: Option<String>,
-    msg: Option<Binary>,
-) -> StdResult<Response> {
-    let mut messages = vec![];
-    try_send_impl(
-        &mut deps,
-        &mut messages,
-        info.sender.clone(),
-        recipient,
-        recipient_code_hash,
-        amount,
-        memo,
-        msg,
-        &env.block,
-    )?;
-
-    Ok(Response::new()
-        .add_messages(messages)
-        .set_data(to_binary(&ExecuteAnswer::Send { status: Success })?))
-}
-
-fn try_batch_send(
-    mut deps: DepsMut,
-    env: Env,
-    info: &MessageInfo,
-    actions: Vec<batch::SendAction>,
-) -> StdResult<Response> {
-    let mut messages = vec![];
-    for action in actions {
-        try_send_impl(
-            &mut deps,
-            &mut messages,
-            info.sender.clone(),
-            action.recipient,
-            action.recipient_code_hash,
-            action.amount,
-            action.memo,
-            action.msg,
-            &env.block,
-        )?;
-    }
-
-    Ok(Response::new()
-        .add_messages(messages)
-        .set_data(to_binary(&ExecuteAnswer::BatchSend { status: Success })?))
-}
-
-fn try_register_receive(
-    deps: DepsMut,
-    info: &MessageInfo,
-    code_hash: String,
-) -> StdResult<Response> {
-    set_receiver_hash(deps.storage, &info.sender, code_hash);
-
-    let data = to_binary(&ExecuteAnswer::RegisterReceive { status: Success })?;
-    Ok(Response::new()
-        .add_attribute("register_status", "success")
-        .set_data(data))
-}
-
 fn try_transfer_from_impl(
     deps: &mut DepsMut,
     env: &Env,
@@ -759,108 +588,6 @@ fn try_batch_transfer_from(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn try_send_from_impl(
-    deps: &mut DepsMut,
-    env: Env,
-    info: &MessageInfo,
-    messages: &mut Vec<CosmosMsg>,
-    spender: Addr, // redundant but more efficient
-    owner: Addr,
-    recipient: Addr,
-    recipient_code_hash: Option<String>,
-    amount: Uint128,
-    memo: Option<String>,
-    msg: Option<Binary>,
-) -> StdResult<()> {
-    try_transfer_from_impl(
-        deps,
-        &env,
-        &spender,
-        &owner,
-        &recipient,
-        amount,
-        memo.clone(),
-    )?;
-
-    try_add_receiver_api_callback(
-        deps.storage,
-        messages,
-        recipient,
-        recipient_code_hash,
-        msg,
-        info.sender.clone(),
-        owner,
-        amount,
-        memo,
-    )?;
-
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn try_send_from(
-    mut deps: DepsMut,
-    env: Env,
-    info: &MessageInfo,
-    owner: Addr,
-    recipient: Addr,
-    recipient_code_hash: Option<String>,
-    amount: Uint128,
-    memo: Option<String>,
-    msg: Option<Binary>,
-) -> StdResult<Response> {
-    let mut messages = vec![];
-    try_send_from_impl(
-        &mut deps,
-        env,
-        info,
-        &mut messages,
-        info.sender.clone(),
-        owner,
-        recipient,
-        recipient_code_hash,
-        amount,
-        memo,
-        msg,
-    )?;
-
-    Ok(Response::new()
-        .add_messages(messages)
-        .set_data(to_binary(&ExecuteAnswer::SendFrom { status: Success })?))
-}
-
-fn try_batch_send_from(
-    mut deps: DepsMut,
-    env: Env,
-    info: &MessageInfo,
-    actions: Vec<batch::SendFromAction>,
-) -> StdResult<Response> {
-    let mut messages = vec![];
-
-    for action in actions {
-        try_send_from_impl(
-            &mut deps,
-            env.clone(),
-            info,
-            &mut messages,
-            info.sender.clone(),
-            action.owner,
-            action.recipient,
-            action.recipient_code_hash,
-            action.amount,
-            action.memo,
-            action.msg,
-        )?;
-    }
-
-    Ok(Response::new()
-        .add_messages(messages)
-        .set_data(to_binary(&ExecuteAnswer::BatchSendFrom {
-            status: Success,
-        })?))
-}
-
 fn perform_transfer(
     store: &mut dyn Storage,
     from: &Addr,
@@ -910,25 +637,17 @@ fn is_valid_symbol(symbol: &str) -> bool {
     len_is_valid && symbol.bytes().all(|byte| (b'A'..=b'Z').contains(&byte))
 }
 
-// pub fn migrate<S: Storage, A: Api, Q: Querier>(
-//     _deps: &mut Extern<S, A, Q>,
-//     _env: Env,
-//     _msg: MigrateMsg,
-// ) -> StdResult<MigrateResponse> {
-//     Ok(MigrateResponse::default())
-// }
-
 #[cfg(test)]
 mod tests {
     use std::any::Any;
 
     use cosmwasm_std::testing::*;
-    use cosmwasm_std::{from_binary, Coin, OwnedDeps, QueryResponse, ReplyOn, SubMsg, WasmMsg};
+    use cosmwasm_std::{from_binary, Coin, OwnedDeps, QueryResponse};
 
     use crate::msg::ResponseStatus;
     use crate::msg::{InitConfig, InitialBalance};
     use crate::storage::claim::Claim;
-    use crate::storage::expiration::Duration;
+    use crate::storage::expiration::{Duration, WEEK};
     use crate::viewing_key_obj::ViewingKeyObj;
 
     use super::*;
@@ -1026,11 +745,9 @@ mod tests {
             ExecuteAnswer::Stake { status }
             | ExecuteAnswer::Unstake { status }
             | ExecuteAnswer::Transfer { status }
-            | ExecuteAnswer::Send { status }
             | ExecuteAnswer::RegisterReceive { status }
             | ExecuteAnswer::SetViewingKey { status }
             | ExecuteAnswer::TransferFrom { status }
-            | ExecuteAnswer::SendFrom { status }
             | ExecuteAnswer::ChangeAdmin { status }
             | ExecuteAnswer::SetContractStatus { status } => {
                 matches!(status, ResponseStatus::Success { .. })
@@ -1191,100 +908,6 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_send() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("bob".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
-        }]);
-        assert!(
-            init_result.is_ok(),
-            "Init failed: {}",
-            init_result.err().unwrap()
-        );
-
-        let handle_msg = ExecuteMsg::RegisterReceive {
-            code_hash: "this_is_a_hash_of_a_code".to_string(),
-            padding: None,
-        };
-        let info = mock_info("contract", &[]);
-
-        let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
-
-        let result = handle_result.unwrap();
-        assert!(ensure_success(result));
-
-        let handle_msg = ExecuteMsg::Send {
-            recipient: Addr::unchecked("contract".to_string()),
-            recipient_code_hash: None,
-            amount: Uint128::new(100),
-            memo: Some("my memo".to_string()),
-            padding: None,
-            msg: Some(to_binary("hey hey you you").unwrap()),
-        };
-        let info = mock_info("bob", &[]);
-
-        let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
-
-        let result = handle_result.unwrap();
-        assert!(ensure_success(result.clone()));
-        let id = 0;
-        assert!(result.messages.contains(&SubMsg {
-            id,
-            msg: CosmosMsg::Wasm(WasmMsg::Execute {
-                contract_addr: "contract".to_string(),
-                code_hash: "this_is_a_hash_of_a_code".to_string(),
-                msg: Snip20ReceiveMsg::new(
-                    Addr::unchecked("bob".to_string()),
-                    Addr::unchecked("bob".to_string()),
-                    Uint128::new(100),
-                    Some("my memo".to_string()),
-                    Some(to_binary("hey hey you you").unwrap())
-                )
-                .into_binary()
-                .unwrap(),
-                funds: vec![],
-            })
-            .into(),
-            reply_on: match id {
-                0 => ReplyOn::Never,
-                _ => ReplyOn::Always,
-            },
-            gas_limit: None,
-        }));
-    }
-
-    #[test]
-    fn test_handle_register_receive() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("bob".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
-        }]);
-        assert!(
-            init_result.is_ok(),
-            "Init failed: {}",
-            init_result.err().unwrap()
-        );
-
-        let handle_msg = ExecuteMsg::RegisterReceive {
-            code_hash: "this_is_a_hash_of_a_code".to_string(),
-            padding: None,
-        };
-        let info = mock_info("contract", &[]);
-
-        let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
-
-        let result = handle_result.unwrap();
-        assert!(ensure_success(result));
-
-        let hash = get_receiver_hash(&deps.storage, &Addr::unchecked("contract".to_string()))
-            .unwrap()
-            .unwrap();
-        assert_eq!(hash, "this_is_a_hash_of_a_code".to_string());
-    }
-
-    #[test]
     fn test_handle_create_viewing_key() {
         let (init_result, mut deps) = init_helper(vec![InitialBalance {
             address: Addr::unchecked("bob".to_string()),
@@ -1416,78 +1039,6 @@ mod tests {
         let alice_balance = BalancesStore::load(&deps.storage, &alice_canonical);
         assert_eq!(bob_balance, 5000 - 2000);
         assert_eq!(alice_balance, 2000);
-        let total_supply = TotalSupplyStore::load(&deps.storage).unwrap();
-        assert_eq!(total_supply, 20000);
-    }
-
-    #[test]
-    fn test_handle_send_from() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("bob".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
-        }]);
-        assert!(
-            init_result.is_ok(),
-            "Init failed: {}",
-            init_result.err().unwrap()
-        );
-
-        // Sanity check
-        let handle_msg = ExecuteMsg::RegisterReceive {
-            code_hash: "lolz".to_string(),
-            padding: None,
-        };
-        let info = mock_info("contract", &[]);
-
-        let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
-
-        assert!(
-            handle_result.is_ok(),
-            "handle() failed: {}",
-            handle_result.err().unwrap()
-        );
-        let send_msg = Binary::from(r#"{ "some_msg": { "some_key": "some_val" } }"#.as_bytes());
-        let snip20_msg = Snip20ReceiveMsg::new(
-            Addr::unchecked("alice".to_string()),
-            Addr::unchecked("bob".to_string()),
-            Uint128::new(2000),
-            Some("my memo".to_string()),
-            Some(send_msg.clone()),
-        );
-        let handle_msg = ExecuteMsg::SendFrom {
-            owner: Addr::unchecked("bob".to_string()),
-            recipient: Addr::unchecked("contract".to_string()),
-            recipient_code_hash: None,
-            amount: Uint128::new(2000),
-            memo: Some("my memo".to_string()),
-            msg: Some(send_msg),
-            padding: None,
-        };
-        let info = mock_info("alice", &[]);
-
-        let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
-
-        assert!(
-            handle_result.is_ok(),
-            "handle() failed: {}",
-            handle_result.err().unwrap()
-        );
-        assert!(handle_result.unwrap().messages.contains(
-            &snip20_msg
-                .into_cosmos_submsg(
-                    "lolz".to_string(),
-                    Addr::unchecked("contract".to_string()),
-                    0
-                )
-                .unwrap()
-        ));
-        let bob_canonical = Addr::unchecked("bob".to_string());
-        let contract_canonical = Addr::unchecked("contract".to_string());
-        let bob_balance = BalancesStore::load(&deps.storage, &bob_canonical);
-        let contract_balance = BalancesStore::load(&deps.storage, &contract_canonical);
-        assert_eq!(bob_balance, 5000 - 2000);
-        assert_eq!(contract_balance, 2000);
         let total_supply = TotalSupplyStore::load(&deps.storage).unwrap();
         assert_eq!(total_supply, 20000);
     }
@@ -1865,14 +1416,14 @@ mod tests {
             handle_result.err().unwrap()
         );
 
-        let send_msg = ExecuteMsg::Transfer {
+        let transfer_msg = ExecuteMsg::Transfer {
             recipient: Addr::unchecked("account".to_string()),
             amount: Uint128::new(123),
             memo: None,
             padding: None,
         };
         let info = mock_info("admin", &[]);
-        let handle_result = execute(deps.as_mut(), mock_env(), info, send_msg);
+        let handle_result = execute(deps.as_mut(), mock_env(), info, transfer_msg);
         let error = extract_error_msg(handle_result);
         assert_eq!(
             error,
@@ -1920,7 +1471,7 @@ mod tests {
             handle_result.err().unwrap()
         );
 
-        let send_msg = ExecuteMsg::Transfer {
+        let transfer_msg = ExecuteMsg::Transfer {
             recipient: Addr::unchecked("account".to_string()),
             amount: Uint128::new(123),
             memo: None,
@@ -1928,7 +1479,7 @@ mod tests {
         };
         let info = mock_info("admin", &[]);
 
-        let handle_result = execute(deps.as_mut(), mock_env(), info, send_msg);
+        let handle_result = execute(deps.as_mut(), mock_env(), info, transfer_msg);
 
         let error = extract_error_msg(handle_result);
         assert_eq!(
@@ -2136,7 +1687,7 @@ mod tests {
                 assert_eq!(public_total_supply, true);
                 assert_eq!(staking_enabled, false);
                 assert_eq!(unstaking_enabled, false);
-                assert_eq!(unbonding_period, Duration::Time(10));
+                assert_eq!(unbonding_period, WEEK * 7);
                 assert_eq!(min_stake_amount, Uint128::new(10));
             }
             _ => panic!("unexpected"),

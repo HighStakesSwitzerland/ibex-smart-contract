@@ -40,34 +40,13 @@ impl InstantiateMsg {
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Default, Debug)]
 #[serde(rename_all = "snake_case")]
 pub struct InitConfig {
-    /// Indicates whether the total supply is public or should be kept secret.
-    /// default: False
-    public_total_supply: Option<bool>,
-    /// Indicates whether stake functionality should be enabled
-    /// default: False
-    enable_stake: Option<bool>,
-    /// Indicates whether unstake functionality should be enabled
-    /// default: False
-    enable_unstake: Option<bool>,
-    /// Min amount to stake (errors under)
     min_stake_amount: Option<u128>,
-    /// Unbonding period
-    unbonding_period: Option<Duration>,
+    /// Unbonding period. Pass json "height: 1234" or "time: 60" instead of 'unbonding_period: xxx' key
+    unbonding_period: Option<Duration>
 }
 
+
 impl InitConfig {
-    pub fn public_total_supply(&self) -> bool {
-        self.public_total_supply.unwrap_or(false)
-    }
-
-    pub fn staking_enabled(&self) -> bool {
-        self.enable_stake.unwrap_or(false)
-    }
-
-    pub fn unstaking_enabled(&self) -> bool {
-        self.enable_unstake.unwrap_or(false)
-    }
-
     pub fn min_staked_amount(&self) -> Uint128 {
         Uint128::new(self.min_stake_amount.unwrap_or(1_000_000))
     }
@@ -88,7 +67,7 @@ pub enum ExecuteMsg {
     Unstake {
         amount: Uint128,
     },
-    Claims {},
+    Claim {},
     // Base ERC-20 stuff
     Transfer {
         recipient: Addr,
@@ -197,12 +176,9 @@ pub enum QueryAnswer {
         name: String,
         symbol: String,
         decimals: u8,
-        total_supply: Option<Uint128>,
+        total_supply: Uint128,
     },
     TokenConfig {
-        public_total_supply: bool,
-        staking_enabled: bool,
-        unstaking_enabled: bool,
         min_stake_amount: Uint128,
         unbonding_period: Duration,
     },

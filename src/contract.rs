@@ -85,9 +85,6 @@ pub fn instantiate(
             symbol: msg.symbol,
             decimals: msg.decimals,
             admin,
-            total_supply_is_public: init_config.public_total_supply(),
-            stake_is_enabled: init_config.staking_enabled(),
-            unstake_is_enabled: init_config.unstaking_enabled(),
             min_stake_amount: init_config.min_staked_amount(),
             unbonding_period: init_config.unbonding_period(),
             contract_address: env.contract.address,
@@ -125,7 +122,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
                 {
                     try_unstake(deps, env, &info, amount)
                 }
-                ExecuteMsg::Claims {} => try_claim(deps, env, &info),
+                ExecuteMsg::Claim {} => try_claim(deps, env, &info),
                 _ => Err(StdError::generic_err(
                     "This contract is stopped and this action is not allowed",
                 )),
@@ -139,7 +136,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
         // Native
         ExecuteMsg::Stake { amount, .. } => try_stake(deps, env, &info, amount),
         ExecuteMsg::Unstake { amount, .. } => try_unstake(deps, env, &info, amount),
-        ExecuteMsg::Claims { .. } => try_claim(deps, env, &info),
+        ExecuteMsg::Claim { .. } => try_claim(deps, env, &info),
         // Base
         ExecuteMsg::Transfer {
             recipient,
@@ -213,11 +210,7 @@ pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
 fn query_token_info(storage: &dyn Storage) -> StdResult<Binary> {
     let constants = Constants::load(storage)?;
 
-    let total_supply = if constants.total_supply_is_public {
-        Some(Uint128::new(TotalSupplyStore::load(storage)?))
-    } else {
-        None
-    };
+    let total_supply = Uint128::new(TotalSupplyStore::load(storage)?);
 
     to_binary(&QueryAnswer::TokenInfo {
         name: constants.name,
@@ -231,9 +224,6 @@ fn query_token_config(storage: &dyn Storage) -> StdResult<Binary> {
     let constants = Constants::load(storage)?;
 
     to_binary(&QueryAnswer::TokenConfig {
-        public_total_supply: constants.total_supply_is_public,
-        staking_enabled: constants.stake_is_enabled,
-        unstaking_enabled: constants.unstake_is_enabled,
         min_stake_amount: constants.min_stake_amount,
         unbonding_period: constants.unbonding_period,
     })
@@ -351,12 +341,6 @@ fn try_stake(
 ) -> StdResult<Response> {
     let constants = Constants::load(deps.storage)?;
 
-    if !constants.stake_is_enabled {
-        return Err(StdError::generic_err(
-            "Stake functionality is not enabled for this token.",
-        ));
-    }
-
     if amount_to_stake.is_zero() {
         return Err(StdError::generic_err("No funds were sent to be staked"));
     }
@@ -402,11 +386,6 @@ fn try_unstake(
     amount: Uint128,
 ) -> StdResult<Response> {
     let constants = Constants::load(deps.storage)?;
-    if !constants.unstake_is_enabled {
-        return Err(StdError::generic_err(
-            "Unstake functionality is not enabled for this token.",
-        ));
-    }
 
     let sender_address = deps.api.addr_canonicalize(info.sender.as_str())?;
     let amount_raw = amount.u128();
@@ -681,8 +660,8 @@ mod tests {
 
     fn init_helper_with_config(
         initial_balances: Vec<InitialBalance>,
-        enable_stake: bool,
-        enable_unstake: bool,
+        min_stake_amount: Uint128,
+        unbonding_period: Duration,
         contract_bal: u128,
     ) -> (
         StdResult<Response>,
@@ -698,10 +677,10 @@ mod tests {
 
         let init_config: InitConfig = from_binary(&Binary::from(
             format!(
-                "{{\"public_total_supply\":false,
-                \"enable_stake\":{},
-                \"enable_unstake\":{}}}",
-                enable_stake, enable_unstake
+                "{{\"min_stake_amount\":\"{}\",
+                \"time\": \"{}\"}}",
+                min_stake_amount,
+                unbonding_period
             )
             .as_bytes(),
         ))
@@ -780,7 +759,6 @@ mod tests {
         assert_eq!(constants.admin, Addr::unchecked("admin".to_string()));
         assert_eq!(constants.symbol, "IBEX".to_string());
         assert_eq!(constants.decimals, 8);
-        assert_eq!(constants.total_supply_is_public, false);
 
         ViewingKey::set(deps.as_mut().storage, "lebron", "lolz fun yay");
         let is_vk_correct = ViewingKey::check(&deps.storage, "lebron", "lolz fun yay");
@@ -799,8 +777,8 @@ mod tests {
                 amount: Uint128::new(5000),
                 staked_amount: Uint128::new(15000),
             }],
-            true,
-            true,
+            Uint128::new(100),
+            Duration::Time(60),
             0,
         );
         assert_eq!(init_result.unwrap(), Response::default());
@@ -815,9 +793,6 @@ mod tests {
         assert_eq!(constants.admin, Addr::unchecked("admin".to_string()));
         assert_eq!(constants.symbol, "IBEX".to_string());
         assert_eq!(constants.decimals, 8);
-        assert_eq!(constants.total_supply_is_public, false);
-        assert_eq!(constants.stake_is_enabled, true);
-        assert_eq!(constants.unstake_is_enabled, true);
 
         ViewingKey::set(deps.as_mut().storage, "lebron", "lolz fun yay");
         let is_vk_correct = ViewingKey::check(&deps.storage, "lebron", "lolz fun yay");
@@ -1116,9 +1091,9 @@ mod tests {
                 amount: Uint128::new(5000),
                 staked_amount: Uint128::new(15000),
             }],
-            false,
-            true,
-            1000,
+            Uint128::new(100),
+            Duration::Time(60),
+            0
         );
         assert!(
             init_result.is_ok(),
@@ -1129,12 +1104,12 @@ mod tests {
         let (init_result_no_reserve, mut deps_no_reserve) = init_helper_with_config(
             vec![InitialBalance {
                 address: Addr::unchecked("butler".to_string()),
-                amount: Uint128::new(5000),
-                staked_amount: Uint128::new(15000),
+                amount: Uint128::new(0),
+                staked_amount: Uint128::new(0),
             }],
-            false,
-            true,
-            0,
+            Uint128::new(100),
+            Duration::Time(60),
+            0
         );
         assert!(
             init_result_no_reserve.is_ok(),
@@ -1142,38 +1117,17 @@ mod tests {
             init_result_no_reserve.err().unwrap()
         );
 
-        let (init_result_for_failure, mut deps_for_failure) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("butler".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
-        }]);
-        assert!(
-            init_result_for_failure.is_ok(),
-            "Init failed: {}",
-            init_result_for_failure.err().unwrap()
-        );
-        // test when unstake disabled
-        let handle_msg = ExecuteMsg::Unstake {
-            amount: Uint128::new(1000),
-        };
-        let info = mock_info("butler", &[]);
-
-        let handle_result = execute(deps_for_failure.as_mut(), mock_env(), info, handle_msg);
-
-        let error = extract_error_msg(handle_result);
-        assert!(error.contains("Unstake functionality is not enabled for this token."));
-
         // test when unstake enabled
         // try to unstake when contract has 0 balance
         let handle_msg = ExecuteMsg::Unstake {
-            amount: Uint128::new(1000000),
+            amount: Uint128::new(1),
         };
         let info = mock_info("butler", &[]);
 
         let handle_result = execute(deps_no_reserve.as_mut(), mock_env(), info, handle_msg);
 
         let error = extract_error_msg(handle_result);
-        assert!(error.contains("Insufficient funds to unstake: balance=15000, wanted=1000000"));
+        assert!(error.contains("Insufficient funds to unstake: balance=0, wanted=1"));
 
         // unstake 1000
         let handle_msg = ExecuteMsg::Unstake {
@@ -1215,8 +1169,8 @@ mod tests {
                 amount: Uint128::new(5000),
                 staked_amount: Uint128::new(0),
             }],
-            true,
-            true,
+            Uint128::new(100),
+            Duration::Time(60),
             0,
         );
         assert!(
@@ -1280,7 +1234,7 @@ mod tests {
 
         dbg!(env.block.time);
         // check claims
-        let handle_msg = ExecuteMsg::Claims {};
+        let handle_msg = ExecuteMsg::Claim {};
         let info = mock_info("lebron", &[]);
         let handle_result = dbg!(execute(deps.as_mut(), env.clone(), info, handle_msg));
 
@@ -1301,8 +1255,8 @@ mod tests {
                 amount: Uint128::new(5000),
                 staked_amount: Uint128::new(15000),
             }],
-            true,
-            false,
+            Uint128::new(100),
+            Duration::Time(60),
             0,
         );
         assert!(
@@ -1310,25 +1264,6 @@ mod tests {
             "Init failed: {}",
             init_result.err().unwrap()
         );
-
-        let (init_result_for_failure, mut deps_for_failure) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("lebron".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
-        }]);
-        assert!(
-            init_result_for_failure.is_ok(),
-            "Init failed: {}",
-            init_result_for_failure.err().unwrap()
-        );
-        // test when stake disabled
-        let handle_msg = ExecuteMsg::Stake {
-            amount: Uint128::new(1000),
-        };
-        let info = mock_info("lebron", &[]);
-        let handle_result = execute(deps_for_failure.as_mut(), mock_env(), info, handle_msg);
-        let error = extract_error_msg(handle_result);
-        assert!(error.contains("Stake functionality is not enabled for this token."));
 
         // test when stake enabled
         let handle_msg = ExecuteMsg::Stake {
@@ -1356,8 +1291,8 @@ mod tests {
                 amount: Uint128::new(5000),
                 staked_amount: Uint128::new(15000),
             }],
-            false,
-            false,
+            Uint128::new(100),
+            Duration::Time(60),
             0,
         );
         assert!(
@@ -1393,8 +1328,8 @@ mod tests {
                 amount: Uint128::new(5000),
                 staked_amount: Uint128::new(15000),
             }],
-            false,
-            true,
+            Uint128::new(100),
+            Duration::Time(60),
             20000,
         );
         assert!(
@@ -1618,7 +1553,7 @@ mod tests {
                 assert_eq!(name, init_name);
                 assert_eq!(symbol, init_symbol);
                 assert_eq!(decimals, init_decimals);
-                assert_eq!(total_supply, Some(Uint128::new(5000)));
+                assert_eq!(total_supply, Uint128::new(5000));
             }
             _ => panic!("unexpected"),
         }
@@ -1633,11 +1568,7 @@ mod tests {
         let min_stake_amount = 10;
         let init_config: InitConfig = from_binary(&Binary::from(
             format!(
-                "{{\"public_total_supply\":{},
-                \"enable_stake\":{},
-                \"enable_unstake\":{},
-                \"min_stake_amount\":\"{}\"}}",
-                true, false, false, min_stake_amount
+                "{{\"min_stake_amount\":\"{}\"}}", min_stake_amount
             )
             .as_bytes(),
         ))
@@ -1678,15 +1609,9 @@ mod tests {
         let query_answer: QueryAnswer = from_binary(&query_result.unwrap()).unwrap();
         match query_answer {
             QueryAnswer::TokenConfig {
-                public_total_supply,
-                staking_enabled,
-                unstaking_enabled,
                 min_stake_amount,
                 unbonding_period,
             } => {
-                assert_eq!(public_total_supply, true);
-                assert_eq!(staking_enabled, false);
-                assert_eq!(unstaking_enabled, false);
                 assert_eq!(unbonding_period, WEEK * 7);
                 assert_eq!(min_stake_amount, Uint128::new(10));
             }
@@ -1868,8 +1793,8 @@ mod tests {
                 amount: Uint128::new(10000),
                 staked_amount: Uint128::new(15000),
             }],
-            true,
-            true,
+            Uint128::new(100),
+            Duration::Time(60),
             1000,
         );
         assert!(

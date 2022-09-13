@@ -32,12 +32,6 @@ pub struct Constants {
     pub admin: Addr,
     pub symbol: String,
     pub decimals: u8,
-    // privacy configuration
-    pub total_supply_is_public: bool,
-    // is staking enabled
-    pub stake_is_enabled: bool,
-    // is unstaking enabled
-    pub unstake_is_enabled: bool,
     // minimal amount to stake
     pub min_stake_amount: Uint128,
     // unbonding period before being able to storage tokens

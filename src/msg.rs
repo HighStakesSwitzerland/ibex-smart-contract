@@ -47,7 +47,7 @@ pub struct InitConfig {
 
 impl InitConfig {
     pub fn min_staked_amount(&self) -> Uint128 {
-        Uint128::new(self.min_stake_amount.unwrap_or(1_000_000))
+        Uint128::new(self.min_stake_amount.unwrap_or(100))
     }
 
     pub fn unbonding_period(&self) -> Duration {

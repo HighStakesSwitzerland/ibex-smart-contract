@@ -9,7 +9,7 @@ At the time of token creation you may configure:
 
 To create a new token:
 
-```secretcli tx compute instantiate <code-id> '{"name":"<your_token_name>","symbol":"<your_token_symbol>","admin":"<optional_admin_address_defaults_to_the_from_address>","decimals":<number_of_decimals>,"initial_balances":[{"address":"<address1>","amount":"<amount_for_address1>"}],"prng_seed":"<base64_encoded_string>","config":{"min_stake_amount":<u128_amount>, "time|height":<duration_in_time_or_blocks>}}' --label <token_label> --from <account>```
+```secretcli tx compute instantiate 1 --from a --label IBEX '{"name": "sibex", "symbol": "IBEX", "label": "IBEX", "decimals": 0, "initial_balances": [{"address": "secret1ap26qrlp8mcq2pg6r47w43l0y8zkqm8a450s03", "amount": "100000", "staked_amount": "100"}], "prng_seed": "dG90b2xhcHJhbGluZQo=", "config": {"min_staked_balance": "100"}}'```
 
 The `admin` field is optional and will default to the "--from" address if you do not specify it.  The `initial_balances` field is optional, and you can specify as many addresses/balances as you like.  The `config` field as well as every field in the `config` is optional.
 

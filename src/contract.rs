@@ -1,20 +1,28 @@
 /// This contract implements SNIP-20 standard:
 /// https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError,
-    StdResult, Storage, Uint128,
+    entry_point, from_binary, to_binary, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response,
+    StdError, StdResult, Storage, Uint128,
 };
+use hex::FromHexError;
 use secret_toolkit::crypto::sha_256;
 use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
+use sha2::Digest;
 
 use crate::batch;
+use crate::helpers::helpers::CosmosSignature;
+use crate::msg::QueryMsg::{IsAirdropClaimed, LatestStage, MerkleRoot};
 use crate::msg::{
     space_pad, ContractStatusLevel, ExecuteAnswer, ExecuteMsg, InstantiateMsg, QueryAnswer,
-    QueryMsg, ResponseStatus::Success,
+    QueryMsg, ResponseStatus, ResponseStatus::Success, SignatureInfo,
 };
 use crate::state::{
-    BalancesStore, Constants, ContractStatusStore, StakedBalancesStore, TotalSupplyStore, CLAIMS,
+    AirdropStages, AirdropStagesExpiration, AirdropStagesStart, AirdropStagesTotalAmount,
+    AirdropStagesTotalAmountCaimed, BalancesStore, ClaimAirdrops, Constants, ContractStatusStore,
+    MerkleRoots, StakedBalancesStore, TotalSupplyStore, CLAIMS,
 };
+use crate::storage::claim::ClaimsResponse;
+use crate::storage::expiration::Expiration;
 use crate::transaction_history::{
     store_stake_in_history, store_transfer_in_history, store_unstake_in_history,
     StoredLegacyTransfer, StoredRichTx,
@@ -78,6 +86,7 @@ pub fn instantiate(
 
     let prng_seed_hashed = sha_256(&msg.prng_seed.0);
 
+    // init constants
     Constants::save(
         deps.storage,
         &Constants {
@@ -90,6 +99,7 @@ pub fn instantiate(
             contract_address: env.contract.address,
         },
     )?;
+
     TotalSupplyStore::save(deps.storage, total_supply)?;
     ContractStatusStore::save(deps.storage, ContractStatusLevel::NormalRun)?;
 
@@ -156,7 +166,23 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
         ExecuteMsg::BatchTransferFrom { actions, .. } => {
             try_batch_transfer_from(deps, &env, &info, actions)
         }
-
+        ExecuteMsg::RegisterMerkleRoot {
+            merkle_root,
+            expiration,
+            start,
+            total_amount,
+        } => {
+            execute_register_merkle_root(deps, &info, merkle_root, expiration, start, total_amount)
+        }
+        ExecuteMsg::WithdrawUnclaimed { address, stage } => {
+            execute_withdraw_airdrop_unclaimed(deps, env, &info, stage, address)
+        }
+        ExecuteMsg::ClaimAirdrop {
+            stage,
+            amount,
+            proof,
+            sig_info,
+        } => execute_airdrop_claim(deps, env, &info, stage, amount, proof, sig_info),
         // Other
         ExecuteMsg::ChangeAdmin { address, .. } => change_admin(deps, &info, address),
         ExecuteMsg::SetContractStatus { level, .. } => set_contract_status(deps, &info, level),
@@ -569,6 +595,196 @@ fn try_batch_transfer_from(
 
     Ok(
         Response::new().set_data(to_binary(&ExecuteAnswer::BatchTransferFrom {
+            status: Success,
+        })?),
+    )
+}
+
+pub fn execute_register_merkle_root(
+    deps: DepsMut,
+    info: &MessageInfo,
+    merkle_root: String,
+    expiration: Expiration,
+    start: Expiration,
+    total_amount: Uint128,
+) -> StdResult<Response> {
+    let constants = Constants::load(deps.storage)?;
+    check_if_admin(&constants.admin, &info.sender)?;
+
+    // check merkle root length
+    let mut root_buf: [u8; 32] = [0; 32];
+    let decoded: Result<(), FromHexError> = hex::decode_to_slice(&merkle_root, &mut root_buf);
+    if decoded.is_err() {
+        return Err(StdError::generic_err("Invalid markle root"));
+    }
+
+    let next_stage = AirdropStages::get_latest(deps.storage)? + 1;
+
+    MerkleRoots::save(deps.storage, next_stage, &merkle_root)?;
+    AirdropStages::set_new_stage(deps.storage, next_stage)?;
+    AirdropStagesExpiration::save(deps.storage, next_stage, expiration)?;
+    AirdropStagesStart::save(deps.storage, next_stage, start)?;
+    AirdropStagesTotalAmount::save(deps.storage, next_stage, total_amount.u128())?;
+    AirdropStagesTotalAmountCaimed::save(deps.storage, next_stage, 0u128)?;
+
+    Ok(
+        Response::new().set_data(to_binary(&ExecuteAnswer::RegisterMerkleRoot {
+            stage: next_stage,
+        })?),
+    )
+}
+
+pub fn execute_airdrop_claim(
+    mut deps: DepsMut,
+    env: Env,
+    info: &MessageInfo,
+    stage: u8,
+    amount: Uint128,
+    proof: Vec<String>,
+    sig_info: Option<SignatureInfo>,
+) -> StdResult<Response> {
+    let start = AirdropStagesStart::get(deps.storage, stage);
+
+    if let Some(start) = start {
+        if !start.is_triggered(&env.block) {
+            return Err(StdError::generic_err("airdrop stage is not live yet."));
+        }
+    }
+
+    // not expired
+    let expiration = AirdropStagesExpiration::get(deps.storage, stage);
+    if expiration.is_expired(&env.block) {
+        return Err(StdError::generic_err("airdrop stage has expired."));
+    }
+
+    // if present, verify signature and extract external address, or use info.sender as proof
+    // if signature is not present in the message, verification will fail since info.sender is not present in the merkle root
+    let proof_addr = match sig_info {
+        None => info.sender.to_string(),
+        Some(sig) => {
+            // verify signature
+            let cosmos_signature: CosmosSignature = from_binary(&sig.signature)?;
+            cosmos_signature.verify(deps.as_ref(), &sig.claim_msg)?;
+            let proof_addr = cosmos_signature.derive_addr_from_pubkey()?;
+
+            if sig.extract_addr()? != info.sender {
+                return Err(StdError::generic_err("Verification failed!"));
+            }
+
+            proof_addr
+        }
+    };
+
+    // verify not claimed
+    let claimed = ClaimAirdrops::get(deps.storage, stage, proof_addr.clone());
+
+    if claimed {
+        return Err(StdError::generic_err("Already claimed"));
+    }
+
+    // verify merkle root
+    let merkle_root = MerkleRoots::get(deps.storage, stage);
+
+    let user_input = format!("{}{}", proof_addr, amount);
+    let hash = sha2::Sha256::digest(user_input.as_bytes())
+        .as_slice()
+        .try_into()
+        .map_err(|_| StdError::generic_err("Wrong length"))?;
+
+    let hash = proof.into_iter().try_fold(hash, |hash, p| {
+        let mut proof_buf = [0; 32];
+        let res = hex::decode_to_slice(p, &mut proof_buf);
+        if res.is_err() {
+            return Err(StdError::generic_err("Verification failed."));
+        }
+        let mut hashes = [hash, proof_buf];
+        hashes.sort_unstable();
+        sha2::Sha256::digest(&hashes.concat())
+            .as_slice()
+            .try_into()
+            .map_err(|_| StdError::generic_err("Wrong length"))
+    })?;
+
+    let mut root_buf: [u8; 32] = [0; 32];
+    let res = hex::decode_to_slice(merkle_root, &mut root_buf);
+    if res.is_err() || root_buf != hash {
+        return Err(StdError::generic_err("Verification failed."));
+    }
+
+    // Update claim index to the current stage
+    ClaimAirdrops::set_claimed(deps.storage, stage, proof_addr.clone())?;
+
+    // Update total claimed to reflect
+    let mut total_claimed_amount = AirdropStagesTotalAmountCaimed::load(deps.storage, stage);
+    total_claimed_amount += amount.u128();
+    AirdropStagesTotalAmountCaimed::save(deps.storage, stage, total_claimed_amount)?;
+
+    // transfer tokens
+    let constants = Constants::load(deps.storage)?;
+    try_transfer_from_impl(
+        &mut deps,
+        &env,
+        &info.sender,
+        &constants.contract_address,
+        &Addr::unchecked(proof_addr),
+        amount,
+        None,
+    )?;
+
+    Ok(
+        Response::new().set_data(to_binary(&ExecuteAnswer::AirdropClaimedResponse {
+            amount: amount.u128(),
+            status: Success,
+        })?),
+    )
+}
+
+pub fn execute_withdraw_airdrop_unclaimed(
+    mut deps: DepsMut,
+    env: Env,
+    info: &MessageInfo,
+    stage: u8,
+    address: String,
+) -> StdResult<Response> {
+    let constants = Constants::load(deps.storage)?;
+    check_if_admin(&constants.admin, &info.sender)?;
+
+    // make sure is expired
+    let expiration = AirdropStagesExpiration::get(deps.storage, stage);
+    if !expiration.is_expired(&env.block) {
+        return Err(StdError::generic_err("Airdrop not expired"));
+    }
+
+    // Get total amount per stage and total claimed
+    let total_amount = AirdropStagesTotalAmount::load(deps.storage, stage);
+    let claimed_amount = AirdropStagesTotalAmountCaimed::load(deps.storage, stage);
+
+    // impossible but who knows
+    if claimed_amount > total_amount {
+        return Err(StdError::generic_err("Claimed amount > total amount"));
+    }
+
+    // Get balance
+    let balance_to_withdraw = total_amount - claimed_amount;
+
+    // Validate address
+    let recipient = deps.api.addr_validate(&address)?;
+
+    // Withdraw the tokens and response
+    let constants = Constants::load(deps.storage)?;
+    try_transfer_from_impl(
+        &mut deps,
+        &env,
+        &info.sender,
+        &constants.contract_address,
+        &recipient,
+        Uint128::new(balance_to_withdraw),
+        None,
+    )?;
+
+    Ok(
+        Response::new().set_data(to_binary(&ExecuteAnswer::AirdropClaimedResponse {
+            amount: balance_to_withdraw,
             status: Success,
         })?),
     )

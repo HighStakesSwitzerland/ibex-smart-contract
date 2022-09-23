@@ -47,6 +47,16 @@ impl Expiration {
     }
 }
 
+impl Expiration {
+    pub fn is_triggered(&self, block: &BlockInfo) -> bool {
+        match self {
+            Expiration::AtHeight(height) => block.height >= *height,
+            Expiration::AtTime(time) => block.time >= *time,
+            Expiration::Never {} => false,
+        }
+    }
+}
+
 impl Add<Duration> for Expiration {
     type Output = StdResult<Expiration>;
 

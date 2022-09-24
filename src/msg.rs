@@ -266,6 +266,20 @@ pub enum QueryAnswer {
     ViewingKeyError {
         msg: String,
     },
+    AirdropClaimed {
+        claimed: bool,
+    },
+    AirdropStage {
+        stage: u8,
+    },
+    MerkleRoot {
+        stage: u8,
+        /// MerkleRoot is hex-encoded merkle root.
+        merkle_root: String,
+        expiration: Expiration,
+        start: Expiration,
+        total_amount: Uint128,
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]

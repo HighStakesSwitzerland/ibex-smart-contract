@@ -197,11 +197,13 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::TokenInfo {} => query_token_info(deps.storage),
         QueryMsg::TokenConfig {} => query_token_config(deps.storage),
         QueryMsg::ContractStatus {} => query_contract_status(deps.storage),
+        LatestStage { .. } => query_latest_sage(deps.storage),
+        MerkleRoot { .. } => query_merkle_root(deps.storage),
         _ => viewing_keys_queries(deps, msg),
     }
 }
 
-pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
+fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
     let (addresses, key) = msg.get_validation_params();
 
     for address in addresses {
@@ -223,6 +225,11 @@ pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
                     page_size,
                     ..
                 } => query_transactions(deps, &address, page.unwrap_or(0), page_size),
+                IsAirdropClaimed {
+                    address,
+                    stage,
+                    ..
+                } => query_airdrop_claimed(deps, stage, &address),
                 _ => panic!("This query type does not require authentication"),
             };
         }
@@ -263,7 +270,28 @@ fn query_contract_status(storage: &dyn Storage) -> StdResult<Binary> {
     })
 }
 
-pub fn query_transfers(deps: Deps, account: &Addr, page: u32, page_size: u32) -> StdResult<Binary> {
+fn query_latest_sage(storage: &dyn Storage) -> StdResult<Binary> {
+    let stage = AirdropStages::get_latest(storage)?;
+    to_binary(&QueryAnswer::AirdropStage { stage: stage})
+}
+
+fn query_merkle_root(storage: &dyn Storage) -> StdResult<Binary> {
+    let stage = AirdropStages::get_latest(storage)?;
+    let merkle_root = MerkleRoots::get(storage, stage);
+    let expiration = AirdropStagesExpiration::get(storage, stage);
+    let start= AirdropStagesStart::get(storage, stage).unwrap();
+    let total_amount = AirdropStagesTotalAmount::load(storage, stage);
+
+    to_binary(&QueryAnswer::MerkleRoot { 
+        stage,
+        expiration,
+        total_amount: Uint128::new(total_amount),
+        merkle_root,
+        start,
+    })
+}
+
+fn query_transfers(deps: Deps, account: &Addr, page: u32, page_size: u32) -> StdResult<Binary> {
     let address = deps.api.addr_canonicalize(account.as_str())?;
     let (txs, total) =
         StoredLegacyTransfer::get_transfers(deps.api, deps.storage, &address, page, page_size)?;
@@ -275,7 +303,7 @@ pub fn query_transfers(deps: Deps, account: &Addr, page: u32, page_size: u32) ->
     to_binary(&result)
 }
 
-pub fn query_transactions(
+fn query_transactions(
     deps: Deps,
     account: &Addr,
     page: u32,
@@ -291,7 +319,7 @@ pub fn query_transactions(
     to_binary(&result)
 }
 
-pub fn query_balance(deps: Deps, account: &Addr) -> StdResult<Binary> {
+fn query_balance(deps: Deps, account: &Addr) -> StdResult<Binary> {
     let amount = Uint128::new(BalancesStore::load(deps.storage, account));
     let staked_amount = Uint128::new(StakedBalancesStore::load(deps.storage, account));
 
@@ -301,6 +329,13 @@ pub fn query_balance(deps: Deps, account: &Addr) -> StdResult<Binary> {
     };
     to_binary(&response)
 }
+
+fn query_airdrop_claimed(deps: Deps, stage: u8, address: &Addr) -> StdResult<Binary> {
+    let is_claimed = ClaimAirdrops::get(deps.storage, stage, address.to_string());
+    let response = QueryAnswer::AirdropClaimed { claimed: is_claimed };
+    to_binary(&response)
+}
+
 
 fn change_admin(deps: DepsMut, info: &MessageInfo, address: Addr) -> StdResult<Response> {
     let mut constants = Constants::load(deps.storage)?;
@@ -312,7 +347,7 @@ fn change_admin(deps: DepsMut, info: &MessageInfo, address: Addr) -> StdResult<R
     Ok(Response::new().set_data(to_binary(&ExecuteAnswer::ChangeAdmin { status: Success })?))
 }
 
-pub fn try_set_key(deps: DepsMut, info: &MessageInfo, key: String) -> StdResult<Response> {
+fn try_set_key(deps: DepsMut, info: &MessageInfo, key: String) -> StdResult<Response> {
     ViewingKey::set(deps.storage, info.sender.as_str(), key.as_str());
     Ok(
         Response::new().set_data(to_binary(&ExecuteAnswer::SetViewingKey {
@@ -321,7 +356,7 @@ pub fn try_set_key(deps: DepsMut, info: &MessageInfo, key: String) -> StdResult<
     )
 }
 
-pub fn try_create_key(
+fn try_create_key(
     deps: DepsMut,
     env: Env,
     info: &MessageInfo,
@@ -600,7 +635,7 @@ fn try_batch_transfer_from(
     )
 }
 
-pub fn execute_register_merkle_root(
+fn execute_register_merkle_root(
     deps: DepsMut,
     info: &MessageInfo,
     merkle_root: String,
@@ -634,7 +669,7 @@ pub fn execute_register_merkle_root(
     )
 }
 
-pub fn execute_airdrop_claim(
+fn execute_airdrop_claim(
     mut deps: DepsMut,
     env: Env,
     info: &MessageInfo,
@@ -739,7 +774,7 @@ pub fn execute_airdrop_claim(
     )
 }
 
-pub fn execute_withdraw_airdrop_unclaimed(
+fn execute_withdraw_airdrop_unclaimed(
     mut deps: DepsMut,
     env: Env,
     info: &MessageInfo,
@@ -841,9 +876,10 @@ fn is_valid_symbol(symbol: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+
     use cosmwasm_std::testing::*;
     use cosmwasm_std::{from_binary, Coin, OwnedDeps, QueryResponse};
-    use std::any::Any;
 
     use crate::msg::ResponseStatus;
     use crate::msg::{InitConfig, InitialBalance};

@@ -14,14 +14,13 @@ use crate::helpers::helpers::CosmosSignature;
 use crate::msg::QueryMsg::{IsAirdropClaimed, LatestStage, MerkleRoot};
 use crate::msg::{
     space_pad, ContractStatusLevel, ExecuteAnswer, ExecuteMsg, InstantiateMsg, QueryAnswer,
-    QueryMsg, ResponseStatus, ResponseStatus::Success, SignatureInfo,
+    QueryMsg, ResponseStatus::Success, SignatureInfo,
 };
 use crate::state::{
     AirdropStages, AirdropStagesExpiration, AirdropStagesStart, AirdropStagesTotalAmount,
     AirdropStagesTotalAmountCaimed, BalancesStore, ClaimAirdrops, Constants, ContractStatusStore,
     MerkleRoots, StakedBalancesStore, TotalSupplyStore, CLAIMS,
 };
-use crate::storage::claim::ClaimsResponse;
 use crate::storage::expiration::Expiration;
 use crate::transaction_history::{
     store_stake_in_history, store_transfer_in_history, store_unstake_in_history,
@@ -100,6 +99,7 @@ pub fn instantiate(
         },
     )?;
 
+    AirdropStages::set_new_stage(deps.storage, 0)?;
     TotalSupplyStore::save(deps.storage, total_supply)?;
     ContractStatusStore::save(deps.storage, ContractStatusLevel::NormalRun)?;
 
@@ -225,11 +225,9 @@ fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
                     page_size,
                     ..
                 } => query_transactions(deps, &address, page.unwrap_or(0), page_size),
-                IsAirdropClaimed {
-                    address,
-                    stage,
-                    ..
-                } => query_airdrop_claimed(deps, stage, &address),
+                IsAirdropClaimed { address, stage, .. } => {
+                    query_airdrop_claimed(deps, stage, &address)
+                }
                 _ => panic!("This query type does not require authentication"),
             };
         }
@@ -272,17 +270,17 @@ fn query_contract_status(storage: &dyn Storage) -> StdResult<Binary> {
 
 fn query_latest_sage(storage: &dyn Storage) -> StdResult<Binary> {
     let stage = AirdropStages::get_latest(storage)?;
-    to_binary(&QueryAnswer::AirdropStage { stage: stage})
+    to_binary(&QueryAnswer::AirdropStage { stage })
 }
 
 fn query_merkle_root(storage: &dyn Storage) -> StdResult<Binary> {
     let stage = AirdropStages::get_latest(storage)?;
     let merkle_root = MerkleRoots::get(storage, stage);
     let expiration = AirdropStagesExpiration::get(storage, stage);
-    let start= AirdropStagesStart::get(storage, stage).unwrap();
+    let start = AirdropStagesStart::get(storage, stage).unwrap();
     let total_amount = AirdropStagesTotalAmount::load(storage, stage);
 
-    to_binary(&QueryAnswer::MerkleRoot { 
+    to_binary(&QueryAnswer::MerkleRoot {
         stage,
         expiration,
         total_amount: Uint128::new(total_amount),
@@ -303,12 +301,7 @@ fn query_transfers(deps: Deps, account: &Addr, page: u32, page_size: u32) -> Std
     to_binary(&result)
 }
 
-fn query_transactions(
-    deps: Deps,
-    account: &Addr,
-    page: u32,
-    page_size: u32,
-) -> StdResult<Binary> {
+fn query_transactions(deps: Deps, account: &Addr, page: u32, page_size: u32) -> StdResult<Binary> {
     let address = deps.api.addr_canonicalize(account.as_str())?;
     let (txs, total) = StoredRichTx::get_txs(deps.api, deps.storage, &address, page, page_size)?;
 
@@ -332,10 +325,11 @@ fn query_balance(deps: Deps, account: &Addr) -> StdResult<Binary> {
 
 fn query_airdrop_claimed(deps: Deps, stage: u8, address: &Addr) -> StdResult<Binary> {
     let is_claimed = ClaimAirdrops::get(deps.storage, stage, address.to_string());
-    let response = QueryAnswer::AirdropClaimed { claimed: is_claimed };
+    let response = QueryAnswer::AirdropClaimed {
+        claimed: is_claimed,
+    };
     to_binary(&response)
 }
-
 
 fn change_admin(deps: DepsMut, info: &MessageInfo, address: Addr) -> StdResult<Response> {
     let mut constants = Constants::load(deps.storage)?;
@@ -679,7 +673,6 @@ fn execute_airdrop_claim(
     sig_info: Option<SignatureInfo>,
 ) -> StdResult<Response> {
     let start = AirdropStagesStart::get(deps.storage, stage);
-
     if let Some(start) = start {
         if !start.is_triggered(&env.block) {
             return Err(StdError::generic_err("airdrop stage is not live yet."));
@@ -876,10 +869,11 @@ fn is_valid_symbol(symbol: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use serde::Deserialize;
     use std::any::Any;
 
     use cosmwasm_std::testing::*;
-    use cosmwasm_std::{from_binary, Coin, OwnedDeps, QueryResponse};
+    use cosmwasm_std::{from_binary, from_slice, Coin, OwnedDeps, QueryResponse, Timestamp};
 
     use crate::msg::ResponseStatus;
     use crate::msg::{InitConfig, InitialBalance};
@@ -902,15 +896,18 @@ mod tests {
         let mut deps = mock_dependencies_with_balance(&[]);
         let env = mock_env();
         let info = mock_info("instantiator", &[]);
-
+        let init_config: InitConfig = from_binary(&Binary::from(
+            r#"{ "public_total_supply": true }"#.as_bytes(),
+        ))
+        .unwrap();
         let init_msg = InstantiateMsg {
             name: "sibex".to_string(),
             admin: Some(Addr::unchecked("admin".to_string())),
             symbol: "IBEX".to_string(),
-            decimals: 8,
+            decimals: 0,
             initial_balances: Some(initial_balances),
             prng_seed: Binary::from("lolz fun yay".as_bytes()),
-            config: None,
+            config: Some(init_config),
         };
 
         (instantiate(deps.as_mut(), env, info, init_msg), deps)
@@ -1016,7 +1013,7 @@ mod tests {
         assert_eq!(constants.name, "sibex".to_string());
         assert_eq!(constants.admin, Addr::unchecked("admin".to_string()));
         assert_eq!(constants.symbol, "IBEX".to_string());
-        assert_eq!(constants.decimals, 8);
+        assert_eq!(constants.decimals, 0);
 
         ViewingKey::set(deps.as_mut().storage, "lebron", "lolz fun yay");
         let is_vk_correct = ViewingKey::check(&deps.storage, "lebron", "lolz fun yay");
@@ -1098,7 +1095,7 @@ mod tests {
     #[test]
     fn test_handle_transfer() {
         let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("bob".to_string()),
+            address: Addr::unchecked("daniel".to_string()),
             amount: Uint128::new(5000),
             staked_amount: Uint128::new(15000),
         }]);
@@ -1114,13 +1111,13 @@ mod tests {
             memo: None,
             padding: None,
         };
-        let info = mock_info("bob", &[]);
+        let info = mock_info("daniel", &[]);
 
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
 
         let result = handle_result.unwrap();
         assert!(ensure_success(result));
-        let bob_addr = Addr::unchecked("bob".to_string());
+        let bob_addr = Addr::unchecked("daniel".to_string());
         let alice_addr = Addr::unchecked("alice".to_string());
 
         assert_eq!(5000 - 1000, BalancesStore::load(&deps.storage, &bob_addr));
@@ -1132,7 +1129,7 @@ mod tests {
             memo: None,
             padding: None,
         };
-        let info = mock_info("bob", &[]);
+        let info = mock_info("daniel", &[]);
 
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
 
@@ -1143,7 +1140,7 @@ mod tests {
     #[test]
     fn test_handle_create_viewing_key() {
         let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("bob".to_string()),
+            address: Addr::unchecked("arthur".to_string()),
             amount: Uint128::new(5000),
             staked_amount: Uint128::new(15000),
         }]);
@@ -1157,7 +1154,7 @@ mod tests {
             entropy: "".to_string(),
             padding: None,
         };
-        let info = mock_info("bob", &[]);
+        let info = mock_info("arthur", &[]);
 
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
 
@@ -1172,19 +1169,15 @@ mod tests {
             ExecuteAnswer::CreateViewingKey { key } => key,
             _ => panic!("NOPE"),
         };
-        // let bob_canonical = deps.as_mut().api.addr_canonicalize("bob").unwrap();
 
-        let result = ViewingKey::check(&deps.storage, "bob", key.as_str());
+        let result = ViewingKey::check(&deps.storage, "arthur", key.as_str());
         assert!(result.is_ok());
-
-        // let saved_vk = read_viewing_key(&deps.storage, &bob_canonical).unwrap();
-        // assert!(key.check_viewing_key(saved_vk.as_slice()));
     }
 
     #[test]
     fn test_handle_set_viewing_key() {
         let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("bob".to_string()),
+            address: Addr::unchecked("anonymous".to_string()),
             amount: Uint128::new(5000),
             staked_amount: Uint128::new(15000),
         }]);
@@ -1199,7 +1192,7 @@ mod tests {
             key: "hi lol".to_string(),
             padding: None,
         };
-        let info = mock_info("bob", &[]);
+        let info = mock_info("anonymous", &[]);
 
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
 
@@ -1216,7 +1209,7 @@ mod tests {
             key: actual_vk.0.clone(),
             padding: None,
         };
-        let info = mock_info("bob", &[]);
+        let info = mock_info("anonymous", &[]);
 
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
 
@@ -1226,13 +1219,9 @@ mod tests {
             to_binary(&unwrapped_result).unwrap(),
             to_binary(&ExecuteAnswer::SetViewingKey { status: Success }).unwrap(),
         );
-        // let bob_canonical = deps.as_mut().api.addr_canonicalize("bob").unwrap();
 
-        let result = ViewingKey::check(&deps.storage, "bob", actual_vk.as_str());
+        let result = ViewingKey::check(&deps.storage, "anonymous", actual_vk.as_str());
         assert!(result.is_ok());
-
-        // let saved_vk = read_viewing_key(&deps.storage, &bob_canonical).unwrap();
-        // assert!(actual_vk.check_viewing_key(&saved_vk));
     }
 
     #[test]
@@ -1279,7 +1268,7 @@ mod tests {
     #[test]
     fn test_handle_change_admin() {
         let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("bob".to_string()),
+            address: Addr::unchecked("bobby".to_string()),
             amount: Uint128::new(5000),
             staked_amount: Uint128::new(15000),
         }]);
@@ -1290,7 +1279,7 @@ mod tests {
         );
 
         let handle_msg = ExecuteMsg::ChangeAdmin {
-            address: Addr::unchecked("bob".to_string()),
+            address: Addr::unchecked("bobby".to_string()),
             padding: None,
         };
         let info = mock_info("admin", &[]);
@@ -1304,7 +1293,7 @@ mod tests {
         );
 
         let admin = Constants::load(&deps.storage).unwrap().admin;
-        assert_eq!(admin, Addr::unchecked("bob".to_string()));
+        assert_eq!(admin, Addr::unchecked("bobby".to_string()));
     }
 
     #[test]
@@ -1540,7 +1529,7 @@ mod tests {
     fn test_handle_stake() {
         let (init_result, mut deps) = init_helper_with_config(
             vec![InitialBalance {
-                address: Addr::unchecked("lebron".to_string()),
+                address: Addr::unchecked("excis".to_string()),
                 amount: Uint128::new(5000),
                 staked_amount: Uint128::new(15000),
             }],
@@ -1558,7 +1547,7 @@ mod tests {
         let handle_msg = ExecuteMsg::Stake {
             amount: Uint128::new(1000),
         };
-        let info = mock_info("lebron", &[]);
+        let info = mock_info("excis", &[]);
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
         assert!(
             handle_result.is_ok(),
@@ -1566,7 +1555,7 @@ mod tests {
             handle_result.err().unwrap()
         );
 
-        let canonical = Addr::unchecked("lebron".to_string());
+        let canonical = Addr::unchecked("excis".to_string());
         assert_eq!(BalancesStore::load(&deps.storage, &canonical), 4000);
         assert_eq!(StakedBalancesStore::load(&deps.storage, &canonical), 16000);
     }
@@ -1576,7 +1565,7 @@ mod tests {
         let admin_err = "Admin commands can only be run from admin address".to_string();
         let (init_result, mut deps) = init_helper_with_config(
             vec![InitialBalance {
-                address: Addr::unchecked("lebron".to_string()),
+                address: Addr::unchecked("lestat".to_string()),
                 amount: Uint128::new(5000),
                 staked_amount: Uint128::new(15000),
             }],
@@ -1613,7 +1602,7 @@ mod tests {
     fn test_handle_pause_with_withdrawals() {
         let (init_result, mut deps) = init_helper_with_config(
             vec![InitialBalance {
-                address: Addr::unchecked("lebron".to_string()),
+                address: Addr::unchecked("natachatte".to_string()),
                 amount: Uint128::new(5000),
                 staked_amount: Uint128::new(15000),
             }],
@@ -1657,7 +1646,7 @@ mod tests {
         let withdraw_msg = ExecuteMsg::Unstake {
             amount: Uint128::new(5000),
         };
-        let info = mock_info("lebron", &[]);
+        let info = mock_info("natachatte", &[]);
         let handle_result = execute(deps.as_mut(), mock_env(), info, withdraw_msg);
 
         assert!(
@@ -1670,7 +1659,7 @@ mod tests {
     #[test]
     fn test_handle_pause_all() {
         let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("lebron".to_string()),
+            address: Addr::unchecked("francis".to_string()),
             amount: Uint128::new(5000),
             staked_amount: Uint128::new(15000),
         }]);
@@ -1714,7 +1703,7 @@ mod tests {
         let withdraw_msg = ExecuteMsg::Unstake {
             amount: Uint128::new(5000),
         };
-        let info = mock_info("lebron", &[]);
+        let info = mock_info("francis", &[]);
 
         let handle_result = execute(deps.as_mut(), mock_env(), info, withdraw_msg);
 
@@ -1791,39 +1780,11 @@ mod tests {
 
     #[test]
     fn test_query_token_info() {
-        let init_name = "sibex".to_string();
-        let init_admin = Addr::unchecked("admin".to_string());
-        let init_symbol = "IBEX".to_string();
-        let init_decimals = 8;
-        let init_config: InitConfig = from_binary(&Binary::from(
-            r#"{ "public_total_supply": true }"#.as_bytes(),
-        ))
-        .unwrap();
-        let init_supply = Uint128::new(5000);
-
-        let mut deps = mock_dependencies_with_balance(&[]);
-        let info = mock_info("instantiator", &[]);
-        let env = mock_env();
-        let init_msg = InstantiateMsg {
-            name: init_name.clone(),
-            admin: Some(init_admin.clone()),
-            symbol: init_symbol.clone(),
-            decimals: init_decimals.clone(),
-            initial_balances: Some(vec![InitialBalance {
-                address: Addr::unchecked("giannis".to_string()),
-                amount: init_supply,
-                staked_amount: Uint128::new(0),
-            }]),
-            prng_seed: Binary::from("lolz fun yay".as_bytes()),
-            config: Some(init_config),
-        };
-        let init_result = instantiate(deps.as_mut(), env, info, init_msg);
-        assert!(
-            init_result.is_ok(),
-            "Init failed: {}",
-            init_result.err().unwrap()
-        );
-
+        let (_init_result, deps) = init_helper(vec![InitialBalance {
+            address: Addr::unchecked("giannis".to_string()),
+            amount: Uint128::new(5000),
+            staked_amount: Uint128::new(15000),
+        }]);
         let query_msg = QueryMsg::TokenInfo {};
         let query_result = query(deps.as_ref(), mock_env(), query_msg);
         assert!(
@@ -1839,10 +1800,10 @@ mod tests {
                 decimals,
                 total_supply,
             } => {
-                assert_eq!(name, init_name);
-                assert_eq!(symbol, init_symbol);
-                assert_eq!(decimals, init_decimals);
-                assert_eq!(total_supply, Uint128::new(5000));
+                assert_eq!(name, "sibex".to_string());
+                assert_eq!(symbol, "IBEX".to_string());
+                assert_eq!(decimals, 0);
+                assert_eq!(total_supply, Uint128::new(20000));
             }
             _ => panic!("unexpected"),
         }
@@ -1850,41 +1811,7 @@ mod tests {
 
     #[test]
     fn test_query_token_config() {
-        let init_name = "sibex".to_string();
-        let init_admin = Addr::unchecked("admin".to_string());
-        let init_symbol = "IBEX".to_string();
-        let init_decimals = 8;
-        let min_stake_amount = 10;
-        let init_config: InitConfig = from_binary(&Binary::from(
-            format!("{{\"min_stake_amount\":\"{}\"}}", min_stake_amount).as_bytes(),
-        ))
-        .unwrap();
-
-        let init_supply = Uint128::new(5000);
-
-        let mut deps = mock_dependencies_with_balance(&[]);
-        let info = mock_info("instantiator", &[]);
-        let env = mock_env();
-        let init_msg = InstantiateMsg {
-            name: init_name.clone(),
-            admin: Some(init_admin.clone()),
-            symbol: init_symbol.clone(),
-            decimals: init_decimals.clone(),
-            initial_balances: Some(vec![InitialBalance {
-                address: Addr::unchecked("giannis".to_string()),
-                amount: init_supply,
-                staked_amount: Uint128::new(0),
-            }]),
-            prng_seed: Binary::from("lolz fun yay".as_bytes()),
-            config: Some(init_config),
-        };
-        let init_result = instantiate(deps.as_mut(), env, info, init_msg);
-        assert!(
-            init_result.is_ok(),
-            "Init failed: {}",
-            init_result.err().unwrap()
-        );
-
+        let (_init_result, deps) = init_helper(vec![]);
         let query_msg = QueryMsg::TokenConfig {};
         let query_result = query(deps.as_ref(), mock_env(), query_msg);
         assert!(
@@ -1908,7 +1835,7 @@ mod tests {
     #[test]
     fn test_query_balance() {
         let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("bob".to_string()),
+            address: Addr::unchecked("michael".to_string()),
             amount: Uint128::new(5000),
             staked_amount: Uint128::new(15000),
         }]);
@@ -1922,7 +1849,7 @@ mod tests {
             key: "key".to_string(),
             padding: None,
         };
-        let info = mock_info("bob", &[]);
+        let info = mock_info("michael", &[]);
 
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
 
@@ -1934,7 +1861,7 @@ mod tests {
         );
 
         let query_msg = QueryMsg::Balance {
-            address: Addr::unchecked("bob".to_string()),
+            address: Addr::unchecked("michael".to_string()),
             key: "wrong_key".to_string(),
         };
         let query_result = query(deps.as_ref(), mock_env(), query_msg);
@@ -1942,7 +1869,7 @@ mod tests {
         assert!(error.contains("Wrong viewing key"));
 
         let query_msg = QueryMsg::Balance {
-            address: Addr::unchecked("bob".to_string()),
+            address: Addr::unchecked("michael".to_string()),
             key: "key".to_string(),
         };
         let query_result = query(deps.as_ref(), mock_env(), query_msg);
@@ -1959,7 +1886,7 @@ mod tests {
     #[test]
     fn test_query_transfer_history() {
         let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("bob".to_string()),
+            address: Addr::unchecked("jean".to_string()),
             amount: Uint128::new(5000),
             staked_amount: Uint128::new(15000),
         }]);
@@ -1973,7 +1900,7 @@ mod tests {
             key: "key".to_string(),
             padding: None,
         };
-        let info = mock_info("bob", &[]);
+        let info = mock_info("jean", &[]);
 
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
 
@@ -1985,7 +1912,7 @@ mod tests {
             memo: None,
             padding: None,
         };
-        let info = mock_info("bob", &[]);
+        let info = mock_info("jean", &[]);
 
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
 
@@ -1997,7 +1924,7 @@ mod tests {
             memo: None,
             padding: None,
         };
-        let info = mock_info("bob", &[]);
+        let info = mock_info("jean", &[]);
 
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
 
@@ -2009,7 +1936,7 @@ mod tests {
             memo: None,
             padding: None,
         };
-        let info = mock_info("bob", &[]);
+        let info = mock_info("jean", &[]);
 
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
 
@@ -2017,7 +1944,7 @@ mod tests {
         assert!(ensure_success(result));
 
         let query_msg = QueryMsg::TransferHistory {
-            address: Addr::unchecked("bob".to_string()),
+            address: Addr::unchecked("jean".to_string()),
             key: "key".to_string(),
             page: None,
             page_size: 0,
@@ -2032,7 +1959,7 @@ mod tests {
         assert!(transfers.is_empty());
 
         let query_msg = QueryMsg::TransferHistory {
-            address: Addr::unchecked("bob".to_string()),
+            address: Addr::unchecked("jean".to_string()),
             key: "key".to_string(),
             page: None,
             page_size: 10,
@@ -2045,7 +1972,7 @@ mod tests {
         assert_eq!(transfers.len(), 3);
 
         let query_msg = QueryMsg::TransferHistory {
-            address: Addr::unchecked("bob".to_string()),
+            address: Addr::unchecked("jean".to_string()),
             key: "key".to_string(),
             page: None,
             page_size: 2,
@@ -2058,7 +1985,7 @@ mod tests {
         assert_eq!(transfers.len(), 2);
 
         let query_msg = QueryMsg::TransferHistory {
-            address: Addr::unchecked("bob".to_string()),
+            address: Addr::unchecked("jean".to_string()),
             key: "key".to_string(),
             page: Some(1),
             page_size: 2,
@@ -2261,5 +2188,212 @@ mod tests {
         ];
 
         assert_eq!(transfers, expected_transfers);
+    }
+
+    #[test]
+    fn test_execute_register_merkle_root() {
+        let (init_result, mut deps) = init_helper(vec![InitialBalance {
+            address: Addr::unchecked("francisco".to_string()),
+            amount: Uint128::new(5000),
+            staked_amount: Uint128::new(15000),
+        }]);
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
+
+        let env = mock_env();
+        let info = mock_info("not_admin", &[]);
+        let msg = ExecuteMsg::RegisterMerkleRoot {
+            merkle_root: "634de21cde1044f41d90373733b0f0fb1c1c71f9652b905cdf159e73c4cf0d37"
+                .to_string(),
+            expiration: Expiration::AtTime(Timestamp::from_seconds(1000)),
+            start: Expiration::AtTime(Timestamp::from_seconds(100)),
+            total_amount: Uint128::new(10000),
+        };
+
+        // from unauthorized address
+        let res = execute(deps.as_mut(), env.clone(), info, msg.clone());
+        let error = extract_error_msg(res);
+        assert!(error.contains("Admin commands can only be run from admin address"));
+
+        // from admin address
+        let info = mock_info("admin", &[]);
+        let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
+        assert_eq!(
+            to_binary(&unwrapped_result).unwrap(),
+            to_binary(&ExecuteAnswer::RegisterMerkleRoot { stage: 1 }).unwrap(),
+        );
+
+        let query_result = query(deps.as_ref(), env.clone(), LatestStage {});
+        let query_answer: QueryAnswer = from_binary(&query_result.unwrap()).unwrap();
+
+        assert_eq!(
+            to_binary(&query_answer).unwrap(),
+            to_binary(&QueryAnswer::AirdropStage { stage: 1 }).unwrap(),
+        );
+
+        let query_result = query(deps.as_ref(), env, MerkleRoot { stage: 1 });
+        let query_answer: QueryAnswer = from_binary(&query_result.unwrap()).unwrap();
+
+        match query_answer {
+            QueryAnswer::MerkleRoot {
+                stage,
+                start,
+                merkle_root,
+                total_amount,
+                expiration,
+            } => {
+                assert_eq!(
+                    merkle_root,
+                    "634de21cde1044f41d90373733b0f0fb1c1c71f9652b905cdf159e73c4cf0d37".to_string()
+                );
+                assert_eq!(stage, 1u8);
+                assert_eq!(total_amount, Uint128::new(10000));
+                assert_eq!(start, Expiration::AtTime(Timestamp::from_seconds(100)));
+                assert_eq!(
+                    expiration,
+                    Expiration::AtTime(Timestamp::from_seconds(1000))
+                );
+            }
+            _ => panic!("unexpected"),
+        }
+    }
+
+    #[derive(Deserialize, Debug)]
+    struct Encoded {
+        account: String,
+        amount: Uint128,
+        root: String,
+        proofs: Vec<String>,
+    }
+
+    #[test]
+    fn test_claim_airdrop() {
+        let (init_result, mut deps) = init_helper(vec![InitialBalance {
+            address: Addr::unchecked("cosmos2contract".to_string()),
+            amount: Uint128::new(5000),
+            staked_amount: Uint128::new(15000),
+        }]);
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
+
+        let test_data = "{
+            \"account\": \"wasm1k9hwzxs889jpvd7env8z49gad3a3633vg350tq\",
+            \"amount\": \"100\",
+            \"root\": \"b45c1ea28b26adb13e412933c9e055b01fdf7585304b00cd8f1cb220aa6c5e88\",
+            \"proofs\": [
+                \"a714186eaedddde26b08b9afda38cf62fdf88d68e3aa0d5a4b55033487fe14a1\",
+                \"fb57090a813128eeb953a4210dd64ee73d2632b8158231effe2f0a18b2d3b5dd\",
+                \"c30992d264c74c58b636a31098c6c27a5fc08b3f61b7eafe2a33dcb445822343\"
+            ]}"
+        .as_bytes();
+
+        let test_data: Encoded = from_slice(test_data).unwrap();
+        let env = mock_env();
+        let info = mock_info("admin", &[]);
+
+        let msg = ExecuteMsg::RegisterMerkleRoot {
+            merkle_root: test_data.root,
+            expiration: Duration::Time(1000).after(&mock_env().block),
+            start: Duration::Time(0).after(&mock_env().block),
+            total_amount: Uint128::new(10000),
+        };
+        let _res = execute(deps.as_mut(), env, info, msg).unwrap();
+
+        let msg = ExecuteMsg::ClaimAirdrop {
+            stage: 1u8,
+            amount: test_data.amount,
+            sig_info: None,
+            proof: test_data.proofs,
+        };
+
+        let env = mock_env();
+        let info = mock_info(test_data.account.as_str(), &[]);
+        let res = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone()).unwrap();
+        let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
+        assert_eq!(
+            to_binary(&unwrapped_result).unwrap(),
+            to_binary(&ExecuteAnswer::AirdropClaimedResponse {
+                status: Success,
+                amount: test_data.amount.u128()
+            })
+            .unwrap(),
+        );
+
+        // Check total claimed on stage 1
+        let total_claimed = AirdropStagesTotalAmountCaimed::load(deps.as_mut().storage, 1);
+        assert_eq!(total_claimed, test_data.amount.u128());
+
+        // Check address is claimed
+        let claim_airdrops =
+            ClaimAirdrops::get(deps.as_mut().storage, 1, test_data.account.to_string());
+        assert_eq!(true, claim_airdrops);
+
+        // check error on double claim
+        let res = execute(deps.as_mut(), env.clone(), info.clone(), msg);
+        let error = extract_error_msg(res);
+        assert_eq!(error, "Already claimed");
+
+        // Second test
+        let test_data_2 = "{
+          \"account\": \"wasm1uwcjkghqlz030r989clzqs8zlaujwyphx0yumy\",
+          \"amount\": \"14\",
+          \"root\": \"a5587bd4d158618b83badf57b1a4206f86e33407e18797ef690c931d73b36232\",
+          \"proofs\": [
+            \"a714186eaedddde26b08b9afda38cf62fdf88d68e3aa0d5a4b55033487fe14a1\",
+            \"1eb08e61c40d5ba334f3c32f3f136e714f0841e5d53af6b78ec94e3b29a01e74\",
+            \"fe570ffb0015447c01bffdcd266fe4ee21a23eb6b499461b9ced5a03c6a9b2f0\",
+            \"fa0224da936bcebd0f018a46ba15a5a9fc2d637f72f7c14b31aeffd8964983b5\"
+          ]}"
+        .as_bytes();
+        let test_data_2: Encoded = from_slice(test_data_2).unwrap();
+
+        let msg = ExecuteMsg::RegisterMerkleRoot {
+            merkle_root: test_data_2.root,
+            expiration: Duration::Time(10000).after(&mock_env().block),
+            start: Duration::Time(1001).after(&mock_env().block),
+            total_amount: Uint128::new(2525),
+        };
+
+        let info = mock_info("admin", &[]);
+        let _res = execute(deps.as_mut(), env, info, msg).unwrap();
+
+        // wait for airdrop start height
+        let mut env = mock_env();
+        env.block.time = env.block.time.plus_seconds(1002);
+
+        let msg = ExecuteMsg::ClaimAirdrop {
+            stage: 2u8,
+            amount: test_data_2.amount,
+            sig_info: None,
+            proof: test_data_2.proofs,
+        };
+
+        let info = mock_info(test_data_2.account.as_str(), &[]);
+        let res = execute(deps.as_mut(), env, info.clone(), msg.clone()).unwrap();
+        let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
+        assert_eq!(
+            to_binary(&unwrapped_result).unwrap(),
+            to_binary(&ExecuteAnswer::AirdropClaimedResponse {
+                status: Success,
+                amount: test_data_2.amount.u128()
+            })
+            .unwrap(),
+        );
+
+        // Check total claimed on stage 1
+        let total_claimed = AirdropStagesTotalAmountCaimed::load(deps.as_ref().storage, 1);
+        assert_eq!(total_claimed, test_data.amount.u128());
+
+        // Check total claimed on stage 2
+        let total_claimed = AirdropStagesTotalAmountCaimed::load(deps.as_ref().storage, 2);
+        assert_eq!(total_claimed, test_data_2.amount.u128());
     }
 }

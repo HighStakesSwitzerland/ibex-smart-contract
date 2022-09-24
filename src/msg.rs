@@ -279,7 +279,7 @@ pub enum QueryAnswer {
         expiration: Expiration,
         start: Expiration,
         total_amount: Uint128,
-    }
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]

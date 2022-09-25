@@ -277,7 +277,7 @@ fn query_merkle_root(storage: &dyn Storage) -> StdResult<Binary> {
     let stage = AirdropStages::get_latest(storage)?;
     let merkle_root = MerkleRoots::get(storage, stage);
     let expiration = AirdropStagesExpiration::get(storage, stage);
-    let start = AirdropStagesStart::get(storage, stage).unwrap();
+    let start = AirdropStagesStart::get(storage, stage);
     let total_amount = AirdropStagesTotalAmount::load(storage, stage);
 
     to_binary(&QueryAnswer::MerkleRoot {
@@ -673,10 +673,8 @@ fn execute_airdrop_claim(
     sig_info: Option<SignatureInfo>,
 ) -> StdResult<Response> {
     let start = AirdropStagesStart::get(deps.storage, stage);
-    if let Some(start) = start {
-        if !start.is_triggered(&env.block) {
-            return Err(StdError::generic_err("airdrop stage is not live yet."));
-        }
+    if !start.is_triggered(&env.block) {
+        return Err(StdError::generic_err("airdrop stage is not live yet."));
     }
 
     // not expired
@@ -777,10 +775,16 @@ fn execute_withdraw_airdrop_unclaimed(
     let constants = Constants::load(deps.storage)?;
     check_if_admin(&constants.admin, &info.sender)?;
 
+    // make sure is started
+    let start = AirdropStagesStart::get(deps.storage, stage);
+    if !start.is_expired(&env.block) {
+        return Err(StdError::generic_err("Airdrop has not started"));
+    }
+
     // make sure is expired
     let expiration = AirdropStagesExpiration::get(deps.storage, stage);
     if !expiration.is_expired(&env.block) {
-        return Err(StdError::generic_err("Airdrop not expired"));
+        return Err(StdError::generic_err("Airdrop has not expired"));
     }
 
     // Get total amount per stage and total claimed
@@ -951,6 +955,34 @@ mod tests {
         };
 
         (instantiate(deps.as_mut(), env, info, init_msg), deps)
+    }
+
+    fn init_helper_with_airdrop(
+        total_amount: u128,
+    ) -> (Vec<u8>, OwnedDeps<MockStorage, MockApi, MockQuerier>) {
+        let (init_result, deps) = init_helper(vec![InitialBalance {
+            address: Addr::unchecked("cosmos2contract".to_string()),
+            amount: Uint128::new(total_amount),
+            staked_amount: Uint128::new(0),
+        }]);
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
+
+        let test_data = "{
+            \"account\": \"wasm1k9hwzxs889jpvd7env8z49gad3a3633vg350tq\",
+            \"amount\": \"100\",
+            \"root\": \"b45c1ea28b26adb13e412933c9e055b01fdf7585304b00cd8f1cb220aa6c5e88\",
+            \"proofs\": [
+                \"a714186eaedddde26b08b9afda38cf62fdf88d68e3aa0d5a4b55033487fe14a1\",
+                \"fb57090a813128eeb953a4210dd64ee73d2632b8158231effe2f0a18b2d3b5dd\",
+                \"c30992d264c74c58b636a31098c6c27a5fc08b3f61b7eafe2a33dcb445822343\"
+            ]}"
+        .as_bytes();
+
+        (test_data.to_owned(), deps)
     }
 
     fn extract_error_msg<T: Any>(error: StdResult<T>) -> String {
@@ -1372,7 +1404,6 @@ mod tests {
         let info = mock_info("butler", &[]);
 
         let handle_result = execute(deps_no_reserve.as_mut(), mock_env(), info, handle_msg);
-
         let error = extract_error_msg(handle_result);
         assert!(error.contains("Insufficient funds to unstake: balance=0, wanted=1"));
 
@@ -1381,7 +1412,6 @@ mod tests {
             amount: Uint128::new(1000),
         };
         let info = mock_info("butler", &[]);
-
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
 
         assert!(
@@ -2271,41 +2301,33 @@ mod tests {
         proofs: Vec<String>,
     }
 
+    #[derive(Deserialize, Debug)]
+    struct Proof {
+        account: String,
+        amount: Uint128,
+        proofs: Vec<String>,
+    }
+
+    #[derive(Deserialize, Debug)]
+    struct MultipleData {
+        root: String,
+        accounts: Vec<Proof>,
+    }
+
     #[test]
     fn test_claim_airdrop() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("cosmos2contract".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
-        }]);
-        assert!(
-            init_result.is_ok(),
-            "Init failed: {}",
-            init_result.err().unwrap()
-        );
-
-        let test_data = "{
-            \"account\": \"wasm1k9hwzxs889jpvd7env8z49gad3a3633vg350tq\",
-            \"amount\": \"100\",
-            \"root\": \"b45c1ea28b26adb13e412933c9e055b01fdf7585304b00cd8f1cb220aa6c5e88\",
-            \"proofs\": [
-                \"a714186eaedddde26b08b9afda38cf62fdf88d68e3aa0d5a4b55033487fe14a1\",
-                \"fb57090a813128eeb953a4210dd64ee73d2632b8158231effe2f0a18b2d3b5dd\",
-                \"c30992d264c74c58b636a31098c6c27a5fc08b3f61b7eafe2a33dcb445822343\"
-            ]}"
-        .as_bytes();
-
-        let test_data: Encoded = from_slice(test_data).unwrap();
+        let (test_data, mut deps) = init_helper_with_airdrop(5000);
+        let test_data: Encoded = from_slice(test_data.as_slice()).unwrap();
         let env = mock_env();
         let info = mock_info("admin", &[]);
 
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
-            expiration: Duration::Time(1000).after(&mock_env().block),
-            start: Duration::Time(0).after(&mock_env().block),
-            total_amount: Uint128::new(10000),
+            expiration: Duration::Time(1000).after(&env.block),
+            start: Duration::Time(0).after(&env.block),
+            total_amount: Uint128::new(5000),
         };
-        let _res = execute(deps.as_mut(), env, info, msg).unwrap();
+        let _res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
 
         let msg = ExecuteMsg::ClaimAirdrop {
             stage: 1u8,
@@ -2314,7 +2336,6 @@ mod tests {
             proof: test_data.proofs,
         };
 
-        let env = mock_env();
         let info = mock_info(test_data.account.as_str(), &[]);
         let res = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone()).unwrap();
         let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
@@ -2335,6 +2356,13 @@ mod tests {
         let claim_airdrops =
             ClaimAirdrops::get(deps.as_mut().storage, 1, test_data.account.to_string());
         assert_eq!(true, claim_airdrops);
+
+        // contract address has less
+        let contract_balance = BalancesStore::load(
+            &deps.storage,
+            &Addr::unchecked("cosmos2contract".to_string()),
+        );
+        assert_eq!(4900u128, contract_balance);
 
         // check error on double claim
         let res = execute(deps.as_mut(), env.clone(), info.clone(), msg);
@@ -2357,9 +2385,9 @@ mod tests {
 
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data_2.root,
-            expiration: Duration::Time(10000).after(&mock_env().block),
-            start: Duration::Time(1001).after(&mock_env().block),
-            total_amount: Uint128::new(2525),
+            expiration: Duration::Time(10000).after(&env.block),
+            start: Duration::Time(1001).after(&env.block),
+            total_amount: Uint128::new(14),
         };
 
         let info = mock_info("admin", &[]);
@@ -2395,5 +2423,214 @@ mod tests {
         // Check total claimed on stage 2
         let total_claimed = AirdropStagesTotalAmountCaimed::load(deps.as_ref().storage, 2);
         assert_eq!(total_claimed, test_data_2.amount.u128());
+    }
+
+    #[test]
+    fn test_claim_airdrop_multiple_users() {
+        let (_, mut deps) = init_helper_with_airdrop(21663);
+        let test_data = "{
+            \"root\": \"b45c1ea28b26adb13e412933c9e055b01fdf7585304b00cd8f1cb220aa6c5e88\",
+            \"accounts\": [
+                 {\"account\": \"wasm1k9hwzxs889jpvd7env8z49gad3a3633vg350tq\",
+                    \"amount\": \"100\",
+                    \"proofs\": [
+                        \"a714186eaedddde26b08b9afda38cf62fdf88d68e3aa0d5a4b55033487fe14a1\",
+                        \"fb57090a813128eeb953a4210dd64ee73d2632b8158231effe2f0a18b2d3b5dd\",
+                        \"c30992d264c74c58b636a31098c6c27a5fc08b3f61b7eafe2a33dcb445822343\"
+                    ]},{\"account\": \"wasm1uy9ucvgerneekxpnfwyfnpxvlsx5dzdpf0mzjd\",
+                    \"amount\": \"1010\",
+                    \"proofs\": [
+                        \"d496b14f0a6207db1c9a1be70d5f3684d3c76f27c0bc75ee979f3e2a71a97ed0\",
+                        \"e3746c7f0e1d1f60708f9e5facaaee77424a8c5f6527f1813f60e8c3755d3b5d\",
+                        \"c30992d264c74c58b636a31098c6c27a5fc08b3f61b7eafe2a33dcb445822343\"
+                    ]},{\"account\": \"wasm1a4x6au55s0fusctyj2ulrxvfpmjcxa92k7ze2v\",
+                    \"amount\": \"10220\",
+                    \"proofs\": [
+                        \"b69c5239d434753af2f6c3eab47f4e78c436f862f14e6989be5c9027c2b6dfe2\",
+                        \"e3746c7f0e1d1f60708f9e5facaaee77424a8c5f6527f1813f60e8c3755d3b5d\",
+                        \"c30992d264c74c58b636a31098c6c27a5fc08b3f61b7eafe2a33dcb445822343\"
+                    ]},{\"account\": \"wasm1ylna88nach9sn5n7qe7u5l6lh7dmt6lp2y63xx\",
+                    \"amount\": \"10333\",
+                    \"proofs\": [\"f89c4ec6a98e26fb5690e50e16e189f9942f0576a5ba711ed75fe01140ddb2af\",\"374f1a32b0a5d5dab16f8fbed8c248e183448732f897002375e0d4ca6e13ad73\"]
+                }]}"
+            .as_bytes();
+        let test_data: MultipleData = from_slice(test_data).unwrap();
+        let mut env = mock_env();
+
+        let msg = ExecuteMsg::RegisterMerkleRoot {
+            merkle_root: test_data.root,
+            expiration: Duration::Time(10000).after(&env.block),
+            start: Duration::Time(1001).after(&env.block),
+            total_amount: Uint128::new(42103),
+        };
+
+        let info = mock_info("admin", &[]);
+        let _res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        // Check total claimed before claiming anything
+        let total_claimed = AirdropStagesTotalAmountCaimed::load(deps.as_ref().storage, 1);
+        assert_eq!(total_claimed, 0);
+
+        // wait for airdrop start height
+        env.block.time = env.block.time.plus_seconds(1002);
+
+        // Loop accounts and claim
+        for account in test_data.accounts.iter() {
+            let msg = ExecuteMsg::ClaimAirdrop {
+                amount: account.amount,
+                stage: 1u8,
+                proof: account.proofs.clone(),
+                sig_info: None,
+            };
+
+            let info = mock_info(account.account.as_str(), &[]);
+            let res = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone()).unwrap();
+            let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
+            assert_eq!(
+                to_binary(&unwrapped_result).unwrap(),
+                to_binary(&ExecuteAnswer::AirdropClaimedResponse {
+                    status: Success,
+                    amount: account.amount.u128()
+                })
+                .unwrap(),
+            );
+        }
+
+        // Check total claimed after all claims
+        let total_claimed = AirdropStagesTotalAmountCaimed::load(deps.as_ref().storage, 1);
+        assert_eq!(total_claimed, 21_663);
+    }
+
+    #[test]
+    fn test_claim_invalid_airdrop() {
+        let (test_data, mut deps) = init_helper_with_airdrop(10000);
+        let test_data: Encoded = from_slice(test_data.as_slice()).unwrap();
+        let mut env = mock_env();
+        let info = mock_info("admin", &[]);
+
+        let msg = ExecuteMsg::RegisterMerkleRoot {
+            merkle_root: test_data.root,
+            expiration: Duration::Time(100).after(&env.block),
+            start: Duration::Time(100).after(&env.block),
+            total_amount: Uint128::new(10000),
+        };
+        let _res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        let msg = ExecuteMsg::ClaimAirdrop {
+            stage: 1u8,
+            amount: test_data.amount,
+            sig_info: None,
+            proof: test_data.proofs,
+        };
+
+        let info = mock_info(test_data.account.as_str(), &[]);
+
+        // Can't withdraw not started stage
+        let handle_result = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone());
+        let error = extract_error_msg(handle_result);
+        assert!(error.contains("airdrop stage is not live yet."));
+
+        // wait for airdrop start height - 1
+        env.block.time = env.block.time.plus_seconds(99);
+
+        let handle_result = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone());
+        let error = extract_error_msg(handle_result);
+        assert!(error.contains("airdrop stage is not live yet."));
+
+        // wait for airdrop expiration height + 1
+        env.block.time = env.block.time.plus_seconds(101);
+
+        // Can't withdraw expired stage
+        let handle_result = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone());
+        let error = extract_error_msg(handle_result);
+        assert!(error.contains("airdrop stage has expired."));
+    }
+
+    #[test]
+    fn test_withdraw_airdrop_unclaimed() {
+        let (test_data, mut deps) = init_helper_with_airdrop(5000);
+        let test_data: Encoded = from_slice(test_data.as_slice()).unwrap();
+        let mut env = mock_env();
+        let info = mock_info("admin", &[]);
+        let withdraw_to = Addr::unchecked("francisco".to_string());
+
+        let msg = ExecuteMsg::RegisterMerkleRoot {
+            merkle_root: test_data.root,
+            expiration: Duration::Time(1001).after(&env.block),
+            start: Duration::Time(100).after(&env.block),
+            total_amount: Uint128::new(5000),
+        };
+        let _res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+        let msg = ExecuteMsg::WithdrawUnclaimed {
+            stage: 1u8,
+            address: withdraw_to.to_string(),
+        };
+
+        // Can't withdraw not started stage
+        let handle_result = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone());
+        let error = extract_error_msg(handle_result);
+        assert!(error.contains("Airdrop has not started"));
+
+        // wait for airdrop to start
+        env.block.time = env.block.time.plus_seconds(101);
+
+        // Can't withdraw not expired stage
+        let handle_result = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone());
+        let error = extract_error_msg(handle_result);
+        assert!(error.contains("Airdrop has not expired"));
+
+        // wait for airdrop expiration height - 1
+        env.block.time = env.block.time.plus_seconds(899);
+
+        // Can't withdraw not expired stage
+        let handle_result = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone());
+        let error = extract_error_msg(handle_result);
+        assert!(error.contains("Airdrop has not expired"));
+
+        // one user claim it's share
+        let claim_msg = ExecuteMsg::ClaimAirdrop {
+            stage: 1u8,
+            amount: test_data.amount,
+            sig_info: None,
+            proof: test_data.proofs,
+        };
+        let user = mock_info(test_data.account.as_str(), &[]);
+        let res = execute(deps.as_mut(), env.clone(), user.clone(), claim_msg).unwrap();
+        let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
+        assert_eq!(
+            to_binary(&unwrapped_result).unwrap(),
+            to_binary(&ExecuteAnswer::AirdropClaimedResponse {
+                status: Success,
+                amount: test_data.amount.u128()
+            })
+            .unwrap(),
+        );
+
+        // wait for airdrop expiration height
+        env.block.time = env.block.time.plus_seconds(1);
+
+        // Can withdraw expired stage
+        let res = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone()).unwrap();
+        let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
+        assert_eq!(
+            to_binary(&unwrapped_result).unwrap(),
+            to_binary(&ExecuteAnswer::AirdropClaimedResponse {
+                amount: 4900u128,
+                status: Success
+            })
+            .unwrap(),
+        );
+
+        // check balances
+        let user_balance = BalancesStore::load(&deps.storage, &user.sender);
+        let withdraw_to_balance = BalancesStore::load(&deps.storage, &withdraw_to);
+        let contract_balance = BalancesStore::load(
+            &deps.storage,
+            &Addr::unchecked("cosmos2contract".to_string()),
+        );
+        assert_eq!(100u128, user_balance);
+        assert_eq!(4900u128, withdraw_to_balance);
+        assert_eq!(0, contract_balance);
     }
 }

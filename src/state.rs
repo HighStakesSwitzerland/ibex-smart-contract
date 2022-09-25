@@ -172,7 +172,7 @@ impl AirdropStages {
 pub struct AirdropStagesExpiration {}
 impl AirdropStagesExpiration {
     pub fn get(store: &dyn Storage, stage: u8) -> Expiration {
-        STAGE_EXPIRATION.get(store, &stage).unwrap_or_default()
+        STAGE_EXPIRATION.get(store, &stage).unwrap()
     }
 
     pub fn save(store: &mut dyn Storage, stage: u8, exp: Expiration) -> StdResult<()> {
@@ -182,8 +182,8 @@ impl AirdropStagesExpiration {
 
 pub struct AirdropStagesStart {}
 impl AirdropStagesStart {
-    pub fn get(store: &dyn Storage, stage: u8) -> Option<Expiration> {
-        STAGE_START.get(store, &stage)
+    pub fn get(store: &dyn Storage, stage: u8) -> Expiration {
+        STAGE_START.get(store, &stage).unwrap()
     }
 
     pub fn save(store: &mut dyn Storage, stage: u8, date: Expiration) -> StdResult<()> {
@@ -194,7 +194,7 @@ impl AirdropStagesStart {
 pub struct AirdropStagesTotalAmount {}
 impl AirdropStagesTotalAmount {
     pub fn load(store: &dyn Storage, stage: u8) -> u128 {
-        STAGE_TOTAL_AMOUNT.get(store, &stage).unwrap_or_default()
+        STAGE_TOTAL_AMOUNT.get(store, &stage).unwrap()
     }
 
     pub fn save(store: &mut dyn Storage, stage: u8, amount: u128) -> StdResult<()> {

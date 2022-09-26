@@ -173,7 +173,7 @@ pub enum ExecuteAnswer {
     RegisterMerkleRoot {
         stage: u8,
     },
-    AirdropClaimedResponse {
+    AirdropClaim {
         status: ResponseStatus,
         amount: u128,
     },

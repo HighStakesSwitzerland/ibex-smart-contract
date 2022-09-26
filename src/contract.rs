@@ -758,7 +758,7 @@ fn execute_airdrop_claim(
     )?;
 
     Ok(
-        Response::new().set_data(to_binary(&ExecuteAnswer::AirdropClaimedResponse {
+        Response::new().set_data(to_binary(&ExecuteAnswer::AirdropClaim {
             amount: amount.u128(),
             status: Success,
         })?),
@@ -815,7 +815,7 @@ fn execute_withdraw_airdrop_unclaimed(
     )?;
 
     Ok(
-        Response::new().set_data(to_binary(&ExecuteAnswer::AirdropClaimedResponse {
+        Response::new().set_data(to_binary(&ExecuteAnswer::AirdropClaim {
             amount: balance_to_withdraw,
             status: Success,
         })?),
@@ -2341,7 +2341,7 @@ mod tests {
         let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
         assert_eq!(
             to_binary(&unwrapped_result).unwrap(),
-            to_binary(&ExecuteAnswer::AirdropClaimedResponse {
+            to_binary(&ExecuteAnswer::AirdropClaim {
                 status: Success,
                 amount: test_data.amount.u128()
             })
@@ -2409,7 +2409,7 @@ mod tests {
         let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
         assert_eq!(
             to_binary(&unwrapped_result).unwrap(),
-            to_binary(&ExecuteAnswer::AirdropClaimedResponse {
+            to_binary(&ExecuteAnswer::AirdropClaim {
                 status: Success,
                 amount: test_data_2.amount.u128()
             })
@@ -2488,7 +2488,7 @@ mod tests {
             let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
             assert_eq!(
                 to_binary(&unwrapped_result).unwrap(),
-                to_binary(&ExecuteAnswer::AirdropClaimedResponse {
+                to_binary(&ExecuteAnswer::AirdropClaim {
                     status: Success,
                     amount: account.amount.u128()
                 })
@@ -2600,7 +2600,7 @@ mod tests {
         let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
         assert_eq!(
             to_binary(&unwrapped_result).unwrap(),
-            to_binary(&ExecuteAnswer::AirdropClaimedResponse {
+            to_binary(&ExecuteAnswer::AirdropClaim {
                 status: Success,
                 amount: test_data.amount.u128()
             })
@@ -2615,7 +2615,7 @@ mod tests {
         let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
         assert_eq!(
             to_binary(&unwrapped_result).unwrap(),
-            to_binary(&ExecuteAnswer::AirdropClaimedResponse {
+            to_binary(&ExecuteAnswer::AirdropClaim {
                 amount: 4900u128,
                 status: Success
             })

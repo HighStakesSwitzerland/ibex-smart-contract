@@ -5,7 +5,7 @@ use crate::transaction_history::{RichTx, Tx};
 use crate::viewing_key_obj::ViewingKeyObj;
 
 use crate::storage::claim::Claim;
-use crate::storage::expiration::{Duration, Expiration, WEEK};
+use crate::storage::expiration::{Duration, Expiration};
 use cosmwasm_std::{from_slice, Addr, Binary, StdError, StdResult, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -225,6 +225,9 @@ impl QueryMsg {
                 (vec![address], ViewingKeyObj(key.clone()))
             }
             Self::TransactionHistory { address, key, .. } => {
+                (vec![address], ViewingKeyObj(key.clone()))
+            }
+            Self::IsAirdropClaimed { address, key, .. } => {
                 (vec![address], ViewingKeyObj(key.clone()))
             }
             _ => panic!("This query type does not require authentication"),

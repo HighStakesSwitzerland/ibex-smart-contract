@@ -107,6 +107,10 @@ docker run --rm -v "$(pwd)":/code \
   --mount type=volume,source="$(basename "$(pwd)")_cache",target=/code/target \
   --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
   cosmwasm/rust-optimizer:0.8.0
+
+  OR
+
+docker run --rm -v "$(pwd)":/contract  --mount type=volume,source="$(basename "$(pwd)")_cache",target=/code/target   --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry   enigmampc/secret-contract-optimizer:1.0.9
 ```
 
 We must mount the contract code to `/code`. You can use a absolute path instead

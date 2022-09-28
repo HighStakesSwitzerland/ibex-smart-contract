@@ -1,10 +1,9 @@
+use std::fmt;
+use std::str::FromStr;
+
+use cosmwasm_std::{BlockInfo, Timestamp};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-use cosmwasm_std::{BlockInfo, StdError, StdResult, Timestamp};
-use std::cmp::Ordering;
-use std::fmt;
-use std::ops::{Add, Mul};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, JsonSchema, Debug)]
 #[serde(rename_all = "snake_case")]
@@ -24,9 +23,26 @@ impl fmt::Display for Expiration {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Expiration::AtHeight(height) => write!(f, "expiration height: {}", height),
-            Expiration::AtTime(time) => write!(f, "expiration time: {}", time),
+            Expiration::AtTime(time) => write!(f, "expiration time: {}", time.nanos()),
             Expiration::Never {} => write!(f, "expiration: never"),
         }
+    }
+}
+
+impl FromStr for Expiration {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.contains("expiration time") {
+            return Ok(Expiration::AtTime(Timestamp::from_nanos(s.strip_prefix("expiration time: ").unwrap().parse().unwrap())))
+        }
+        if s.contains("expiration height") {
+            return Ok(Expiration::AtHeight(s.strip_prefix("expiration height: ").unwrap().parse().unwrap()))
+        }
+        if s.contains("expiration: never") {
+            return Ok(Expiration::Never {})
+        }
+        Err(())
     }
 }
 
@@ -39,10 +55,24 @@ impl Default for Expiration {
 
 impl Expiration {
     pub fn is_expired(&self, block: &BlockInfo) -> bool {
+
         match self {
             Expiration::AtHeight(height) => block.height >= *height,
-            Expiration::AtTime(time) => block.time >= *time,
+            Expiration::AtTime(time) => {
+                dbg!(time.seconds());
+                dbg!(block.time.seconds());
+                dbg!(block.time.seconds() >= time.seconds());
+                return block.time >= *time
+            },
             Expiration::Never {} => false,
+        }
+    }
+    
+    pub fn as_seconds(&self) -> u64 {
+        match self {
+            Expiration::AtHeight(height) => *height,
+            Expiration::AtTime(time) => time.seconds(),
+            Expiration::Never {} => 0,
         }
     }
 }
@@ -53,40 +83,6 @@ impl Expiration {
             Expiration::AtHeight(height) => block.height >= *height,
             Expiration::AtTime(time) => block.time >= *time,
             Expiration::Never {} => false,
-        }
-    }
-}
-
-impl Add<Duration> for Expiration {
-    type Output = StdResult<Expiration>;
-
-    fn add(self, duration: Duration) -> StdResult<Expiration> {
-        match (self, duration) {
-            (Expiration::AtTime(t), Duration::Time(delta)) => {
-                Ok(Expiration::AtTime(t.plus_seconds(delta)))
-            }
-            (Expiration::AtHeight(h), Duration::Height(delta)) => {
-                Ok(Expiration::AtHeight(h + delta))
-            }
-            (Expiration::Never {}, _) => Ok(Expiration::Never {}),
-            _ => Err(StdError::generic_err("Cannot add height and time")),
-        }
-    }
-}
-
-// TODO: does this make sense? do we get expected info/error when None is returned???
-impl PartialOrd for Expiration {
-    fn partial_cmp(&self, other: &Expiration) -> Option<Ordering> {
-        match (self, other) {
-            // compare if both height or both time
-            (Expiration::AtHeight(h1), Expiration::AtHeight(h2)) => Some(h1.cmp(h2)),
-            (Expiration::AtTime(t1), Expiration::AtTime(t2)) => Some(t1.cmp(t2)),
-            // if at least one is never, we can compare with anything
-            (Expiration::Never {}, Expiration::Never {}) => Some(Ordering::Equal),
-            (Expiration::Never {}, _) => Some(Ordering::Greater),
-            (_, Expiration::Never {}) => Some(Ordering::Less),
-            // if they are mis-matched finite ends, no compare possible
-            _ => None,
         }
     }
 }
@@ -127,29 +123,6 @@ impl Duration {
         match self {
             Duration::Height(h) => Duration::Height(h + 1),
             Duration::Time(t) => Duration::Time(t + 1),
-        }
-    }
-}
-
-impl Add<Duration> for Duration {
-    type Output = StdResult<Duration>;
-
-    fn add(self, rhs: Duration) -> StdResult<Duration> {
-        match (self, rhs) {
-            (Duration::Time(t), Duration::Time(t2)) => Ok(Duration::Time(t + t2)),
-            (Duration::Height(h), Duration::Height(h2)) => Ok(Duration::Height(h + h2)),
-            _ => Err(StdError::generic_err("Cannot add height and time")),
-        }
-    }
-}
-
-impl Mul<u64> for Duration {
-    type Output = Duration;
-
-    fn mul(self, rhs: u64) -> Self::Output {
-        match self {
-            Duration::Time(t) => Duration::Time(t * rhs),
-            Duration::Height(h) => Duration::Height(h * rhs),
         }
     }
 }

@@ -1,9 +1,11 @@
+use std::str::FromStr;
 use cosmwasm_std::{Addr, StdError, StdResult, Storage, Uint128};
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
 use schemars::JsonSchema;
 use secret_toolkit::serialization::Json;
 use secret_toolkit::storage::{Item, Keymap};
 use serde::{Deserialize, Serialize};
+use serde::de::Unexpected::Str;
 
 use crate::msg::ContractStatusLevel;
 use crate::storage::claim::Claims;
@@ -39,8 +41,8 @@ pub static STAKED_BALANCES: Keymap<Addr, u128> = Keymap::new(PREFIX_STAKED_BALAN
 pub static MERKLE_ROOT: Keymap<u8, String> = Keymap::new(PREFIX_MERKLE_ROOT);
 pub static CLAIMED_AIRDROP: Keymap<(String, u8), bool> = Keymap::new(PREFIX_CLAIMED_AIRDROP);
 pub static LATEST_STAGE: Item<u8> = Item::new(PREFIX_LATEST_STAGE);
-pub static STAGE_EXPIRATION: Keymap<u8, Expiration> = Keymap::new(PREFIX_STAGE_EXPIRATION);
-pub static STAGE_START: Keymap<u8, Expiration> = Keymap::new(PREFIX_STAGE_START);
+pub static STAGE_EXPIRATION: Keymap<u8, String> = Keymap::new(PREFIX_STAGE_EXPIRATION);
+pub static STAGE_START: Keymap<u8, String> = Keymap::new(PREFIX_STAGE_START);
 pub static STAGE_TOTAL_AMOUNT: Keymap<u8, u128> = Keymap::new(PREFIX_STAGE_TOTAL_AMOUNT);
 pub static STAGE_TOTAL_AMOUNT_CLAIMED: Keymap<u8, u128> =
     Keymap::new(PREFIX_STAGE_TOTAL_AMOUNT_CLAIMED);
@@ -114,7 +116,7 @@ impl TxCountStore {
 pub struct BalancesStore {}
 impl BalancesStore {
     pub fn load(store: &dyn Storage, account: &Addr) -> u128 {
-        BALANCES.get(store, account).unwrap_or_default()
+        BALANCES.get(store, account).unwrap_or(0)
     }
 
     pub fn save(store: &mut dyn Storage, account: &Addr, amount: u128) -> StdResult<()> {
@@ -125,7 +127,7 @@ impl BalancesStore {
 pub struct StakedBalancesStore {}
 impl StakedBalancesStore {
     pub fn load(store: &dyn Storage, account: &Addr) -> u128 {
-        STAKED_BALANCES.get(store, account).unwrap_or_default()
+        STAKED_BALANCES.get(store, account).unwrap_or(0)
     }
 
     pub fn save(store: &mut dyn Storage, account: &Addr, amount: u128) -> StdResult<()> {
@@ -136,7 +138,7 @@ impl StakedBalancesStore {
 pub struct MerkleRoots {}
 impl MerkleRoots {
     pub fn get(store: &dyn Storage, stage: u8) -> String {
-        MERKLE_ROOT.get(store, &stage).unwrap_or_default()
+        MERKLE_ROOT.get(store, &stage).unwrap_or(String::from("No root for this stage"))
     }
 
     pub fn save(store: &mut dyn Storage, stage: u8, proof: &String) -> StdResult<()> {
@@ -147,9 +149,7 @@ impl MerkleRoots {
 pub struct ClaimAirdrops {}
 impl ClaimAirdrops {
     pub fn get(store: &dyn Storage, stage: u8, addr: String) -> bool {
-        CLAIMED_AIRDROP
-            .get(store, &(addr, stage))
-            .unwrap_or_default()
+        CLAIMED_AIRDROP.get(store, &(addr, stage)).unwrap_or(false)
     }
 
     pub fn set_claimed(store: &mut dyn Storage, stage: u8, addr: String) -> StdResult<()> {
@@ -172,22 +172,26 @@ impl AirdropStages {
 pub struct AirdropStagesExpiration {}
 impl AirdropStagesExpiration {
     pub fn get(store: &dyn Storage, stage: u8) -> Expiration {
-        STAGE_EXPIRATION.get(store, &stage).unwrap()
+        Expiration::from_str(STAGE_EXPIRATION.get(store, &stage).unwrap().as_str()).unwrap()
     }
 
     pub fn save(store: &mut dyn Storage, stage: u8, exp: Expiration) -> StdResult<()> {
-        STAGE_EXPIRATION.insert(store, &stage, &exp)
+        STAGE_EXPIRATION.insert(store, &stage, &exp.to_string())
     }
 }
 
 pub struct AirdropStagesStart {}
 impl AirdropStagesStart {
-    pub fn get(store: &dyn Storage, stage: u8) -> Expiration {
-        STAGE_START.get(store, &stage).unwrap()
+    pub fn get(store: &dyn Storage, stage: u8) -> Option<Expiration> {
+        let stage_exp = STAGE_START.get(store, &stage);
+        if stage_exp == None {
+            return None
+        }
+        Some(Expiration::from_str(stage_exp.unwrap().as_str()).unwrap())
     }
 
     pub fn save(store: &mut dyn Storage, stage: u8, date: Expiration) -> StdResult<()> {
-        STAGE_START.insert(store, &stage, &date)
+        STAGE_START.insert(store, &stage, &date.to_string())
     }
 }
 
@@ -205,9 +209,7 @@ impl AirdropStagesTotalAmount {
 pub struct AirdropStagesTotalAmountCaimed {}
 impl AirdropStagesTotalAmountCaimed {
     pub fn load(store: &dyn Storage, stage: u8) -> u128 {
-        STAGE_TOTAL_AMOUNT_CLAIMED
-            .get(store, &stage)
-            .unwrap_or_default()
+        STAGE_TOTAL_AMOUNT_CLAIMED.get(store, &stage).unwrap_or(0)
     }
 
     pub fn save(store: &mut dyn Storage, stage: u8, amount: u128) -> StdResult<()> {

@@ -11,7 +11,6 @@ use sha2::Digest;
 
 use crate::batch;
 use crate::helpers::helpers::CosmosSignature;
-use crate::msg::QueryMsg::{IsAirdropClaimed, LatestStage, MerkleRoot};
 use crate::msg::{
     space_pad, ContractStatusLevel, ExecuteAnswer, ExecuteMsg, InstantiateMsg, QueryAnswer,
     QueryMsg, ResponseStatus::Success, SignatureInfo,
@@ -197,8 +196,8 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::TokenInfo {} => query_token_info(deps.storage),
         QueryMsg::TokenConfig {} => query_token_config(deps.storage),
         QueryMsg::ContractStatus {} => query_contract_status(deps.storage),
-        LatestStage { .. } => query_latest_sage(deps.storage),
-        MerkleRoot { .. } => query_merkle_root(deps.storage),
+        QueryMsg::LatestStage { .. } => query_latest_sage(deps.storage),
+        QueryMsg::MerkleRoot { stage } => query_merkle_root(deps.storage, stage),
         _ => viewing_keys_queries(deps, msg),
     }
 }
@@ -225,9 +224,11 @@ fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
                     page_size,
                     ..
                 } => query_transactions(deps, &address, page.unwrap_or(0), page_size),
-                IsAirdropClaimed { address, stage, .. } => {
-                    query_airdrop_claimed(deps, stage, &address)
-                }
+                QueryMsg::IsAirdropClaimed {
+                    address,
+                    stage,
+                    ..
+                } => query_airdrop_claimed(deps, stage, &address),
                 _ => panic!("This query type does not require authentication"),
             };
         }
@@ -273,19 +274,28 @@ fn query_latest_sage(storage: &dyn Storage) -> StdResult<Binary> {
     to_binary(&QueryAnswer::AirdropStage { stage })
 }
 
-fn query_merkle_root(storage: &dyn Storage) -> StdResult<Binary> {
-    let stage = AirdropStages::get_latest(storage)?;
+fn query_merkle_root(storage: &dyn Storage, stage: u8) -> StdResult<Binary> {
+    let start = AirdropStagesStart::get(storage, stage);
+
+    if start == None {
+        return to_binary(&QueryAnswer::MerkleRoot {
+            stage,
+            expiration: Expiration::Never {},
+            start: Expiration::Never {},
+            merkle_root: String::from(""),
+            total_amount: Uint128::new(0)
+        })
+    }
+
     let merkle_root = MerkleRoots::get(storage, stage);
     let expiration = AirdropStagesExpiration::get(storage, stage);
-    let start = AirdropStagesStart::get(storage, stage);
     let total_amount = AirdropStagesTotalAmount::load(storage, stage);
-
     to_binary(&QueryAnswer::MerkleRoot {
         stage,
         expiration,
         total_amount: Uint128::new(total_amount),
         merkle_root,
-        start,
+        start: start.unwrap(),
     })
 }
 
@@ -673,14 +683,22 @@ fn execute_airdrop_claim(
     sig_info: Option<SignatureInfo>,
 ) -> StdResult<Response> {
     let start = AirdropStagesStart::get(deps.storage, stage);
-    if !start.is_triggered(&env.block) {
-        return Err(StdError::generic_err("airdrop stage is not live yet."));
+    if start == None || !start.unwrap().is_triggered(&env.block) {
+        return Err(StdError::generic_err(
+            "airdrop stage is not live yet: ".to_string()
+                + start.unwrap().to_string().as_str()
+                + " "
+                + &env.block.time.seconds().to_string()));
     }
 
     // not expired
     let expiration = AirdropStagesExpiration::get(deps.storage, stage);
     if expiration.is_expired(&env.block) {
-        return Err(StdError::generic_err("airdrop stage has expired."));
+        return Err(StdError::generic_err(
+            "airdrop stage has expired. ".to_string()
+                + expiration.as_seconds().to_string().as_str()
+                + " "
+                + &env.block.time.seconds().to_string()));
     }
 
     // if present, verify signature and extract external address, or use info.sender as proof
@@ -777,7 +795,7 @@ fn execute_withdraw_airdrop_unclaimed(
 
     // make sure is started
     let start = AirdropStagesStart::get(deps.storage, stage);
-    if !start.is_expired(&env.block) {
+    if start == None || !start.unwrap().is_expired(&env.block) {
         return Err(StdError::generic_err("Airdrop has not started"));
     }
 
@@ -875,6 +893,7 @@ fn is_valid_symbol(symbol: &str) -> bool {
 mod tests {
     use serde::Deserialize;
     use std::any::Any;
+    use std::str::FromStr;
 
     use cosmwasm_std::testing::*;
     use cosmwasm_std::{from_binary, from_slice, Coin, OwnedDeps, QueryResponse, Timestamp};
@@ -882,7 +901,7 @@ mod tests {
     use crate::msg::ResponseStatus;
     use crate::msg::{InitConfig, InitialBalance};
     use crate::storage::claim::Claim as ClaimAmount;
-    use crate::storage::expiration::{Duration, WEEK};
+    use crate::storage::expiration::{Duration};
     use crate::viewing_key_obj::ViewingKeyObj;
 
     use super::*;
@@ -901,7 +920,7 @@ mod tests {
         let env = mock_env();
         let info = mock_info("instantiator", &[]);
         let init_config: InitConfig = from_binary(&Binary::from(
-            r#"{ "public_total_supply": true }"#.as_bytes(),
+            r#"{ "unbonding_period": {"time": 60}, "min_stake_amount": "1000"}"#.as_bytes(),
         ))
         .unwrap();
         let init_msg = InstantiateMsg {
@@ -937,7 +956,7 @@ mod tests {
         let init_config: InitConfig = from_binary(&Binary::from(
             format!(
                 "{{\"min_stake_amount\":\"{}\",
-                \"time\": \"{}\"}}",
+                \"unbonding_period\":{{\"time\": \"{}\"}}}}",
                 min_stake_amount, unbonding_period
             )
             .as_bytes(),
@@ -1855,8 +1874,8 @@ mod tests {
                 min_stake_amount,
                 unbonding_period,
             } => {
-                assert_eq!(unbonding_period, WEEK * 7);
-                assert_eq!(min_stake_amount, Uint128::new(10));
+                assert_eq!(unbonding_period, Duration::Time(60));
+                assert_eq!(min_stake_amount, Uint128::new(1000));
             }
             _ => panic!("unexpected"),
         }
@@ -2258,7 +2277,7 @@ mod tests {
             to_binary(&ExecuteAnswer::RegisterMerkleRoot { stage: 1 }).unwrap(),
         );
 
-        let query_result = query(deps.as_ref(), env.clone(), LatestStage {});
+        let query_result = query(deps.as_ref(), env.clone(), QueryMsg::LatestStage {});
         let query_answer: QueryAnswer = from_binary(&query_result.unwrap()).unwrap();
 
         assert_eq!(
@@ -2266,7 +2285,7 @@ mod tests {
             to_binary(&QueryAnswer::AirdropStage { stage: 1 }).unwrap(),
         );
 
-        let query_result = query(deps.as_ref(), env, MerkleRoot { stage: 1 });
+        let query_result = query(deps.as_ref(), env, QueryMsg::MerkleRoot { stage: 1 });
         let query_answer: QueryAnswer = from_binary(&query_result.unwrap()).unwrap();
 
         match query_answer {
@@ -2327,7 +2346,10 @@ mod tests {
             start: Duration::Time(0).after(&env.block),
             total_amount: Uint128::new(5000),
         };
-        let _res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        dbg!(msg.clone());
+
+        let _res = execute(deps.as_mut(), env.clone(), info, msg.clone()).unwrap();
 
         let msg = ExecuteMsg::ClaimAirdrop {
             stage: 1u8,
@@ -2633,4 +2655,83 @@ mod tests {
         assert_eq!(4900u128, withdraw_to_balance);
         assert_eq!(0, contract_balance);
     }
+
+    #[test]
+    fn test_is_airdrop_claimed() {
+        let (test_data, mut deps) = init_helper_with_airdrop(15000);
+        let test_data: Encoded = from_slice(test_data.as_slice()).unwrap();
+        let mut env = mock_env();
+        let info = mock_info("admin", &[]);
+
+        let msg = ExecuteMsg::RegisterMerkleRoot {
+            merkle_root: test_data.root,
+            expiration: Duration::Time(1000).after(&env.block),
+            start: Duration::Time(100).after(&env.block),
+            total_amount: Uint128::new(15000),
+        };
+        let _res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        // create viewing key
+        let handle_msg = ExecuteMsg::CreateViewingKey {
+            entropy: "".to_string(),
+            padding: None,
+        };
+        let info = mock_info("wasm1k9hwzxs889jpvd7env8z49gad3a3633vg350tq", &[]);
+        let handle_result = execute(deps.as_mut(), env.clone(), info.clone(), handle_msg);
+
+        assert!(
+            handle_result.is_ok(),
+            "handle() failed: {}",
+            handle_result.err().unwrap()
+        );
+        let answer: ExecuteAnswer = from_binary(&handle_result.unwrap().data.unwrap()).unwrap();
+
+        let key = match answer {
+            ExecuteAnswer::CreateViewingKey { key } => key,
+            _ => panic!("NOPE"),
+        };
+        let query_is_claim_msg = QueryMsg::IsAirdropClaimed {
+            key: key.0,
+            address: info.sender,
+            stage: 1
+        };
+        let query_response = query(deps.as_ref(), mock_env(), query_is_claim_msg.clone()).unwrap();
+        let claimed = match from_binary(&query_response).unwrap() {
+            QueryAnswer::AirdropClaimed { claimed } => claimed,
+            _ => panic!("Unexpected result from claim query"),
+        };
+        assert_eq!(false, claimed);
+
+        // claim it
+        // wait for airdrop start height
+        let mut env = mock_env();
+        env.block.time = env.block.time.plus_seconds(101);
+
+        let msg = ExecuteMsg::ClaimAirdrop {
+            stage: 1u8,
+            amount: test_data.amount,
+            sig_info: None,
+            proof: test_data.proofs,
+        };
+
+        let info = mock_info(test_data.account.as_str(), &[]);
+        let res = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone()).unwrap();
+        let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
+        assert_eq!(
+            to_binary(&unwrapped_result).unwrap(),
+            to_binary(&ExecuteAnswer::AirdropClaim {
+                status: Success,
+                amount: test_data.amount.u128()
+            }).unwrap(),
+        );
+
+        // recheck is_claimed
+        let query_response = query(deps.as_ref(), env, query_is_claim_msg).unwrap();
+        let claimed = match from_binary(&query_response).unwrap() {
+            QueryAnswer::AirdropClaimed { claimed } => claimed,
+            _ => panic!("Unexpected result from claim query"),
+        };
+        assert_eq!(true, claimed);
+    }
+
 }

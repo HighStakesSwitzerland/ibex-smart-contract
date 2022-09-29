@@ -1,6 +1,7 @@
+extern crate core;
+
 mod batch;
 pub mod contract;
-mod helpers;
 pub mod msg;
 pub mod state;
 mod storage;

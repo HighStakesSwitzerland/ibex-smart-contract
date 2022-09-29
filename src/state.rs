@@ -1,11 +1,10 @@
-use std::str::FromStr;
 use cosmwasm_std::{Addr, StdError, StdResult, Storage, Uint128};
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
 use schemars::JsonSchema;
 use secret_toolkit::serialization::Json;
 use secret_toolkit::storage::{Item, Keymap};
 use serde::{Deserialize, Serialize};
-use serde::de::Unexpected::Str;
+use std::str::FromStr;
 
 use crate::msg::ContractStatusLevel;
 use crate::storage::claim::Claims;
@@ -62,6 +61,7 @@ pub struct Constants {
 
     // the address of this contract, used to validate query permits
     pub contract_address: Addr,
+    pub ibex_wallet: Addr,
 }
 
 impl Constants {
@@ -137,8 +137,8 @@ impl StakedBalancesStore {
 
 pub struct MerkleRoots {}
 impl MerkleRoots {
-    pub fn get(store: &dyn Storage, stage: u8) -> String {
-        MERKLE_ROOT.get(store, &stage).unwrap_or(String::from("No root for this stage"))
+    pub fn get(store: &dyn Storage, stage: u8) -> Option<String> {
+        MERKLE_ROOT.get(store, &stage)
     }
 
     pub fn save(store: &mut dyn Storage, stage: u8, proof: &String) -> StdResult<()> {
@@ -185,7 +185,7 @@ impl AirdropStagesStart {
     pub fn get(store: &dyn Storage, stage: u8) -> Option<Expiration> {
         let stage_exp = STAGE_START.get(store, &stage);
         if stage_exp == None {
-            return None
+            return None;
         }
         Some(Expiration::from_str(stage_exp.unwrap().as_str()).unwrap())
     }

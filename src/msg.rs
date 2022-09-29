@@ -1,14 +1,14 @@
 #![allow(clippy::field_reassign_with_default)] // This is triggered in `#[derive(JsonSchema)]`
 
-use crate::batch;
-use crate::transaction_history::{RichTx, Tx};
-use crate::viewing_key_obj::ViewingKeyObj;
-
-use crate::storage::claim::Claim;
-use crate::storage::expiration::{Duration, Expiration};
-use cosmwasm_std::{from_slice, Addr, Binary, StdError, StdResult, Uint128};
+use cosmwasm_std::{Addr, Binary, StdError, StdResult, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::batch;
+use crate::storage::claim::Claim;
+use crate::storage::expiration::{Duration, Expiration};
+use crate::transaction_history::{RichTx, Tx};
+use crate::viewing_key_obj::ViewingKeyObj;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
 pub struct InitialBalance {
@@ -74,10 +74,6 @@ pub enum ExecuteMsg {
         amount: Uint128,
         /// Proof is hex-encoded merkle proof.
         proof: Vec<String>,
-        /// Enables cross chain airdrops.
-        /// Target wallet proves identity by sending a signed [SignedClaimMsg](SignedClaimMsg)
-        /// containing the recipient address.
-        sig_info: Option<SignatureInfo>,
     },
 
     /// Base ERC-20 stuff
@@ -115,6 +111,9 @@ pub enum ExecuteMsg {
     SetContractStatus {
         level: ContractStatusLevel,
         padding: Option<String>,
+    },
+    RegisterIbexWallet {
+        address: Addr,
     },
     RegisterMerkleRoot {
         /// MerkleRoot is hex-encoded merkle root.
@@ -170,8 +169,13 @@ pub enum ExecuteAnswer {
     SetContractStatus {
         status: ResponseStatus,
     },
+    RegisterIbexWallet {
+        status: ResponseStatus,
+    },
     RegisterMerkleRoot {
         stage: u8,
+        start: Expiration,
+        expiration: Expiration,
     },
     AirdropClaim {
         status: ResponseStatus,
@@ -306,17 +310,6 @@ pub enum ContractStatusLevel {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct SignatureInfo {
-    pub claim_msg: Binary,
-    pub signature: Binary,
-}
-impl SignatureInfo {
-    pub fn extract_addr(&self) -> Result<String, StdError> {
-        let claim_msg = from_slice::<ClaimMsg>(&self.claim_msg)?;
-        Ok(claim_msg.address)
-    }
-}
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct ClaimMsg {
     // To provide claiming via ledger, the address is passed in the memo field of a cosmos msg.
     #[serde(rename = "memo")]
@@ -376,8 +369,9 @@ pub fn space_pad(block_size: usize, message: &mut Vec<u8>) -> &mut Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cosmwasm_std::{from_slice, StdResult};
+
+    use super::*;
 
     #[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq)]
     #[serde(rename_all = "snake_case")]

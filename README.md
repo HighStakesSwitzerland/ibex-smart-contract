@@ -70,17 +70,22 @@ To know if a wallet has already claimed an airdrop
 
 To claim a weekly airdrop:
 
-```secretcli tx compute execute <contract-address> '{"claim_airdrop": { stage: <stage_number>, amount: <amount_to_claim>, proof: <merkle_proof_generated_in_js>, sig_info: <signature_generated_by_keplr>} }' --from <account> --gas 1000000```
+```secretcli tx compute execute <contract-address> '{"claim_airdrop": { stage: <stage_number>, amount: <amount_to_claim>, proof: <merkle_proof_generated_in_js>, sig_info: { claim_msg: <cleartext_message>, signature <signature_generated_by_keplr_or_secretcli>} }' --from <account> --gas 1000000```
 
 To view the token contract's configuration:
 
 ```secretcli q compute query <contract-address> '{"token_config": {}}'```
 
 To upload a new airdrop (i.e. merkle root hash):
+
 ```secretcli tx compute execute <contract-address> '{"register_merkle_root": {"merkle_root": <hash>, "expiration": <stage_expiration>, "start": <stage_start>, "total_amount": "<total_amount_airdropped>"}}' --from <admin_account> --gas 1000000```
-`stage_expiration` and `start`: format is `"expiration": { "time": "<nanoseconds from epoch>" }`
+
+`stage_expiration` and `start`: format is `"expiration": { "at_time": "<nanoseconds from epoch>" }`
+
 Example:
+
 `'{"register_merkle_root": {"merkle_root": "915b457b0c8e42e1c857439b818dc1e7ceb664cf54cbd1d7d5fb37c21cf49ece", "expiration": {"at_time": "1664469259"}, "start": {"at_time": "1664369259"} , "total_amount": "46003"}}'`
+
 Returns the airdrop stage number.
 
 ## Troubleshooting

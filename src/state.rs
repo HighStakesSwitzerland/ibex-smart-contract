@@ -1,25 +1,21 @@
+use std::str::FromStr;
+
 use cosmwasm_std::{Addr, StdError, StdResult, Storage, Uint128};
-use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
 use schemars::JsonSchema;
 use secret_toolkit::serialization::Json;
 use secret_toolkit::storage::{Item, Keymap};
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 
-use crate::msg::ContractStatusLevel;
+use crate::msg::{ContractStatusLevel, WalletBalances, WalletClaimBalances};
 use crate::storage::claim::Claims;
 use crate::storage::expiration::{Duration, Expiration};
 
-pub static CONFIG_KEY: &[u8] = b"config";
 pub const KEY_CONSTANTS: &[u8] = b"constants";
 pub const KEY_TOTAL_SUPPLY: &[u8] = b"total_supply";
 pub const KEY_CONTRACT_STATUS: &[u8] = b"contract_status";
 pub const KEY_TX_COUNT: &[u8] = b"tx-count";
-pub const PREFIX_CONFIG: &[u8] = b"config";
 pub const PREFIX_BALANCES: &[u8] = b"balances";
 pub const PREFIX_STAKED_BALANCES: &[u8] = b"staked_balances";
-pub const PREFIX_VIEW_KEY: &[u8] = b"viewingkey";
-pub const PREFIX_RECEIVERS: &[u8] = b"receivers";
 pub const PREFIX_CLAIMED_AIRDROP: &[u8] = b"claim";
 pub const PREFIX_MERKLE_ROOT: &[u8] = b"merkle_root";
 pub const PREFIX_STAGE_EXPIRATION: &[u8] = b"stage_exp";
@@ -38,7 +34,8 @@ pub static BALANCES: Keymap<Addr, u128> = Keymap::new(PREFIX_BALANCES);
 pub static STAKED_BALANCES: Keymap<Addr, u128> = Keymap::new(PREFIX_STAKED_BALANCES);
 
 pub static MERKLE_ROOT: Keymap<u8, String> = Keymap::new(PREFIX_MERKLE_ROOT);
-pub static CLAIMED_AIRDROP: Keymap<(String, u8), bool> = Keymap::new(PREFIX_CLAIMED_AIRDROP);
+pub static CLAIMED_AIRDROP: Keymap<(String, u8), (bool, u128)> =
+    Keymap::new(PREFIX_CLAIMED_AIRDROP);
 pub static LATEST_STAGE: Item<u8> = Item::new(PREFIX_LATEST_STAGE);
 pub static STAGE_EXPIRATION: Keymap<u8, String> = Keymap::new(PREFIX_STAGE_EXPIRATION);
 pub static STAGE_START: Keymap<u8, String> = Keymap::new(PREFIX_STAGE_START);
@@ -119,6 +116,23 @@ impl BalancesStore {
         BALANCES.get(store, account).unwrap_or(0)
     }
 
+    pub fn get_all(store: &dyn Storage) -> Vec<WalletBalances> {
+        let page_size = 100u32;
+        let values = BALANCES.paging(store, 0, page_size);
+        let mut balances = Vec::new();
+
+        for (_, (key_value, value)) in values.unwrap().iter().enumerate() {
+            let bal: WalletBalances = WalletBalances {
+                address: key_value.to_string(),
+                unstaked: *value,
+                staked: StakedBalancesStore::load(store, key_value),
+            };
+            balances.push(bal);
+        }
+
+        balances
+    }
+
     pub fn save(store: &mut dyn Storage, account: &Addr, amount: u128) -> StdResult<()> {
         BALANCES.insert(store, account, &amount)
     }
@@ -148,12 +162,35 @@ impl MerkleRoots {
 
 pub struct ClaimAirdrops {}
 impl ClaimAirdrops {
-    pub fn get(store: &dyn Storage, stage: u8, addr: String) -> bool {
-        CLAIMED_AIRDROP.get(store, &(addr, stage)).unwrap_or(false)
+    pub fn get(store: &dyn Storage, stage: u8, addr: String) -> Option<(bool, u128)> {
+        CLAIMED_AIRDROP.get(store, &(addr, stage))
     }
 
-    pub fn set_claimed(store: &mut dyn Storage, stage: u8, addr: String) -> StdResult<()> {
-        CLAIMED_AIRDROP.insert(store, &(addr, stage), &true)
+    pub fn get_all(store: &dyn Storage) -> Vec<WalletClaimBalances> {
+        let page_size = 100u32;
+        let values = CLAIMED_AIRDROP.paging(store, 0, page_size);
+        let mut balances = Vec::new();
+
+        for (_, ((wallet, stage), (claimed, amount))) in values.unwrap().iter().enumerate() {
+            let bal: WalletClaimBalances = WalletClaimBalances {
+                address: wallet.to_string(),
+                stage: *stage,
+                claimed: *claimed,
+                amount: *amount,
+            };
+            balances.push(bal);
+        }
+
+        balances
+    }
+
+    pub fn set_claimed(
+        store: &mut dyn Storage,
+        stage: u8,
+        addr: String,
+        amount: u128,
+    ) -> StdResult<()> {
+        CLAIMED_AIRDROP.insert(store, &(addr, stage), &(true, amount))
     }
 }
 pub struct AirdropStages {}
@@ -215,19 +252,4 @@ impl AirdropStagesTotalAmountCaimed {
     pub fn save(store: &mut dyn Storage, stage: u8, amount: u128) -> StdResult<()> {
         STAGE_TOTAL_AMOUNT_CLAIMED.insert(store, &stage, &amount)
     }
-}
-
-// Receiver Interface
-
-pub fn get_receiver_hash(store: &dyn Storage, account: &Addr) -> Option<StdResult<String>> {
-    let store = ReadonlyPrefixedStorage::new(store, PREFIX_RECEIVERS);
-    store.get(account.as_str().as_bytes()).map(|data| {
-        String::from_utf8(data)
-            .map_err(|_err| StdError::invalid_utf8("stored code hash was not a valid String"))
-    })
-}
-
-pub fn set_receiver_hash(store: &mut dyn Storage, account: &Addr, code_hash: String) {
-    let mut store = PrefixedStorage::new(store, PREFIX_RECEIVERS);
-    store.set(account.as_str().as_bytes(), code_hash.as_bytes());
 }

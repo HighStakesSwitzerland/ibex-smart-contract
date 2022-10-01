@@ -92,7 +92,7 @@ pub enum ExecuteMsg {
         padding: Option<String>,
     },
     TransferFrom {
-        owner: Addr,
+        spender: Addr,
         recipient: Addr,
         amount: Uint128,
         memo: Option<String>,
@@ -122,11 +122,20 @@ pub enum ExecuteMsg {
         start: Expiration,
         total_amount: Uint128,
     },
+    ReplaceMerkleRoot {
+        stage: u8,
+        merkle_root: String,
+        expiration: Expiration,
+        start: Expiration,
+        total_amount: Uint128,
+    },
     /// Withdraw the remaining tokens after expire time (only owner)
     WithdrawUnclaimed {
         stage: u8,
         address: String,
     },
+    GetAll {},
+    GetAllClaimed {},
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug)]
@@ -176,10 +185,17 @@ pub enum ExecuteAnswer {
         stage: u8,
         start: Expiration,
         expiration: Expiration,
+        merkle_root: String,
     },
     AirdropClaim {
         status: ResponseStatus,
         amount: u128,
+    },
+    GetAll {
+        result: Vec<WalletBalances>,
+    },
+    GetAllClaimed {
+        result: Vec<WalletClaimBalances>,
     },
 }
 
@@ -275,6 +291,7 @@ pub enum QueryAnswer {
     },
     AirdropClaimed {
         claimed: bool,
+        amount: u128,
     },
     AirdropStage {
         stage: u8,
@@ -334,6 +351,21 @@ pub struct LatestStageResponse {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct IsClaimedResponse {
     pub is_claimed: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct WalletBalances {
+    pub(crate) address: String,
+    pub(crate) staked: u128,
+    pub(crate) unstaked: u128,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct WalletClaimBalances {
+    pub(crate) address: String,
+    pub(crate) stage: u8,
+    pub(crate) claimed: bool,
+    pub(crate) amount: u128,
 }
 
 pub fn status_level_to_u8(status_level: ContractStatusLevel) -> u8 {

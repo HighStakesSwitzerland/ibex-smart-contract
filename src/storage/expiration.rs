@@ -34,13 +34,23 @@ impl FromStr for Expiration {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.contains("expiration time") {
-            return Ok(Expiration::AtTime(Timestamp::from_nanos(s.strip_prefix("expiration time: ").unwrap().parse().unwrap())))
+            return Ok(Expiration::AtTime(Timestamp::from_nanos(
+                s.strip_prefix("expiration time: ")
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+            )));
         }
         if s.contains("expiration height") {
-            return Ok(Expiration::AtHeight(s.strip_prefix("expiration height: ").unwrap().parse().unwrap()))
+            return Ok(Expiration::AtHeight(
+                s.strip_prefix("expiration height: ")
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+            ));
         }
         if s.contains("expiration: never") {
-            return Ok(Expiration::Never {})
+            return Ok(Expiration::Never {});
         }
         Err(())
     }
@@ -55,19 +65,13 @@ impl Default for Expiration {
 
 impl Expiration {
     pub fn is_expired(&self, block: &BlockInfo) -> bool {
-
         match self {
             Expiration::AtHeight(height) => block.height >= *height,
-            Expiration::AtTime(time) => {
-                dbg!(time.seconds());
-                dbg!(block.time.seconds());
-                dbg!(block.time.seconds() >= time.seconds());
-                return block.time >= *time
-            },
+            Expiration::AtTime(time) => return block.time >= *time,
             Expiration::Never {} => false,
         }
     }
-    
+
     pub fn as_seconds(&self) -> u64 {
         match self {
             Expiration::AtHeight(height) => *height,
@@ -75,7 +79,6 @@ impl Expiration {
             Expiration::Never {} => 0,
         }
     }
-    
 }
 
 impl Expiration {
@@ -104,8 +107,8 @@ pub enum Duration {
 impl fmt::Display for Duration {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Duration::Height(height) => write!(f, "height: {}", height),
-            Duration::Time(time) => write!(f, "time: {}", time),
+            Duration::Height(height) => write!(f, "\"height\": {}", height),
+            Duration::Time(time) => write!(f, "\"time\": {}", time),
         }
     }
 }

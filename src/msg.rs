@@ -10,20 +10,13 @@ use crate::storage::expiration::{Duration, Expiration};
 use crate::transaction_history::{RichTx, Tx};
 use crate::viewing_key_obj::ViewingKeyObj;
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
-pub struct InitialBalance {
-    pub address: Addr,
-    pub amount: Uint128,
-    pub staked_amount: Uint128,
-}
-
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct InstantiateMsg {
     pub name: String,
     pub admin: Option<Addr>,
     pub symbol: String,
     pub decimals: u8,
-    pub initial_balances: Option<Vec<InitialBalance>>,
+    pub initial_balances: Option<Vec<WalletBalances>>,
     pub prng_seed: Binary,
     pub config: Option<InitConfig>,
 }
@@ -134,8 +127,6 @@ pub enum ExecuteMsg {
         stage: u8,
         address: String,
     },
-    GetAll {},
-    GetAllClaimed {},
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug)]
@@ -150,6 +141,7 @@ pub enum ExecuteAnswer {
     },
     Claim {
         status: ResponseStatus,
+        amount: u128,
     },
     // Base
     Transfer {
@@ -187,15 +179,9 @@ pub enum ExecuteAnswer {
         expiration: Expiration,
         merkle_root: String,
     },
-    AirdropClaim {
+    WithdrawUnclaimed {
         status: ResponseStatus,
         amount: u128,
-    },
-    GetAll {
-        result: Vec<WalletBalances>,
-    },
-    GetAllClaimed {
-        result: Vec<WalletClaimBalances>,
     },
 }
 
@@ -234,6 +220,8 @@ pub enum QueryMsg {
         address: Addr,
         key: String,
     },
+    GetAll {},
+    GetAllClaimed {},
 }
 
 impl QueryMsg {
@@ -303,6 +291,12 @@ pub enum QueryAnswer {
         expiration: Expiration,
         start: Expiration,
         total_amount: Uint128,
+    },
+    GetAll {
+        result: Vec<WalletBalances>,
+    },
+    GetAllClaimed {
+        result: Vec<WalletClaimBalances>,
     },
 }
 

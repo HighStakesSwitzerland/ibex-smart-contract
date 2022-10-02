@@ -16,7 +16,7 @@ use crate::msg::{
 };
 use crate::state::{
     AirdropStages, AirdropStagesExpiration, AirdropStagesStart, AirdropStagesTotalAmount,
-    AirdropStagesTotalAmountCaimed, BalancesStore, ClaimAirdrops, Constants, ContractStatusStore,
+    AirdropStagesTotalAmountCaimed, BalancesStore, ClaimedAirdrops, Constants, ContractStatusStore,
     MerkleRoots, StakedBalancesStore, TotalSupplyStore, CLAIMS,
 };
 use crate::storage::expiration::Expiration;
@@ -58,11 +58,19 @@ pub fn instantiate(
     {
         let initial_balances = msg.initial_balances.unwrap_or_default();
         for balance in initial_balances {
-            let amount = balance.amount.u128();
-            BalancesStore::save(deps.storage, &balance.address, amount)?;
+            let amount = balance.unstaked;
+            BalancesStore::save(
+                deps.storage,
+                &Addr::unchecked(balance.address.clone()),
+                amount,
+            )?;
 
-            let staked_amount = balance.staked_amount.u128();
-            StakedBalancesStore::save(deps.storage, &balance.address, staked_amount)?;
+            let staked_amount = balance.staked;
+            StakedBalancesStore::save(
+                deps.storage,
+                &Addr::unchecked(balance.address),
+                staked_amount,
+            )?;
 
             if let Some(new_total_supply) = total_supply.checked_add(amount) {
                 total_supply = new_total_supply;
@@ -207,21 +215,21 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
         } => execute_airdrop_claim(deps, env, &info, stage, amount, proof),
         ExecuteMsg::ChangeAdmin { address, .. } => change_admin(deps, &info, address),
         ExecuteMsg::SetContractStatus { level, .. } => set_contract_status(deps, &info, level),
-        ExecuteMsg::GetAll { .. } => get_all_ibex_balances(deps, &info),
-        ExecuteMsg::GetAllClaimed { .. } => get_all_ibex_claims(deps, &info),
     };
 
     pad_response(response)
 }
 
 #[entry_point]
-pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
+pub fn query(deps: Deps, _env: Env, info: MessageInfo, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::TokenInfo {} => query_token_info(deps.storage),
         QueryMsg::TokenConfig {} => query_token_config(deps.storage),
         QueryMsg::ContractStatus {} => query_contract_status(deps.storage),
         QueryMsg::LatestStage { .. } => query_latest_sage(deps.storage),
         QueryMsg::MerkleRoot { stage } => query_merkle_root(deps.storage, stage),
+        QueryMsg::GetAll { .. } => get_all_ibex_balances(deps, &info),
+        QueryMsg::GetAllClaimed { .. } => get_all_ibex_claims(deps, &info),
         _ => viewing_keys_queries(deps, msg),
     }
 }
@@ -366,7 +374,7 @@ fn query_airdrop_claimed(deps: Deps, stage: u8, address: &Addr) -> StdResult<Bin
     }
 
     let is_claimed =
-        ClaimAirdrops::get(deps.storage, stage, address.to_string()).unwrap_or((false, 0));
+        ClaimedAirdrops::get(deps.storage, stage, address.to_string()).unwrap_or((false, 0));
     let response = QueryAnswer::AirdropClaimed {
         claimed: is_claimed.0,
         amount: is_claimed.1,
@@ -533,14 +541,13 @@ fn try_claim(deps: DepsMut, env: Env, info: &MessageInfo) -> StdResult<Response>
     }
 
     // update balance
-    let unstaked_balances = BalancesStore::load(deps.storage, &info.sender);
-    BalancesStore::save(
-        deps.storage,
-        &info.sender,
-        unstaked_balances + release.u128(),
-    )?;
+    let to_transfer = BalancesStore::load(deps.storage, &info.sender) + release.u128();
+    BalancesStore::save(deps.storage, &info.sender, to_transfer)?;
 
-    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Claim { status: Success })?))
+    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Claim {
+        status: Success,
+        amount: to_transfer,
+    })?))
 }
 
 fn query_claim(deps: Deps, account: &Addr) -> StdResult<Binary> {
@@ -759,7 +766,7 @@ fn execute_airdrop_claim(
 
     // verify not claimed
     let proof_addr = info.sender.to_string();
-    if let Some(claimed) = ClaimAirdrops::get(deps.storage, stage, proof_addr.clone()) {
+    if let Some(claimed) = ClaimedAirdrops::get(deps.storage, stage, proof_addr.clone()) {
         if claimed.0 {
             return Err(StdError::generic_err("Already claimed"));
         }
@@ -797,7 +804,7 @@ fn execute_airdrop_claim(
     }
 
     // Update claim index to the current stage
-    ClaimAirdrops::set_claimed(deps.storage, stage, proof_addr.clone(), amount.u128())?;
+    ClaimedAirdrops::set_claimed(deps.storage, stage, proof_addr.clone(), amount.u128())?;
 
     // Update total claimed to reflect
     let mut total_claimed_amount = AirdropStagesTotalAmountCaimed::load(deps.storage, stage);
@@ -816,12 +823,10 @@ fn execute_airdrop_claim(
         None, // FIXME: from HS with love?
     )?;
 
-    Ok(
-        Response::new().set_data(to_binary(&ExecuteAnswer::AirdropClaim {
-            amount: amount.u128(),
-            status: Success,
-        })?),
-    )
+    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Claim {
+        amount: amount.u128(),
+        status: Success,
+    })?))
 }
 
 fn execute_register_ibex_wallet(
@@ -892,7 +897,7 @@ fn execute_withdraw_airdrop_unclaimed(
     )?;
 
     Ok(
-        Response::new().set_data(to_binary(&ExecuteAnswer::AirdropClaim {
+        Response::new().set_data(to_binary(&ExecuteAnswer::WithdrawUnclaimed {
             amount: balance_to_withdraw,
             status: Success,
         })?),
@@ -928,28 +933,26 @@ fn perform_transfer(
     Ok(())
 }
 
-fn get_all_ibex_balances(deps: DepsMut, info: &MessageInfo) -> StdResult<Response> {
+fn get_all_ibex_balances(deps: Deps, info: &MessageInfo) -> StdResult<Binary> {
     let constants = Constants::load(deps.storage)?;
     check_if_admin(&constants.admin, &info.sender)?;
 
     let all_balances = BalancesStore::get_all(deps.storage);
 
-    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::GetAll {
+    to_binary(&QueryAnswer::GetAll {
         result: all_balances,
-    })?))
+    })
 }
 
-fn get_all_ibex_claims(deps: DepsMut, info: &MessageInfo) -> StdResult<Response> {
+fn get_all_ibex_claims(deps: Deps, info: &MessageInfo) -> StdResult<Binary> {
     let constants = Constants::load(deps.storage)?;
     check_if_admin(&constants.admin, &info.sender)?;
 
-    let all_balances = ClaimAirdrops::get_all(deps.storage);
+    let all_balances = ClaimedAirdrops::get_all(deps.storage);
 
-    Ok(
-        Response::new().set_data(to_binary(&ExecuteAnswer::GetAllClaimed {
-            result: all_balances,
-        })?),
-    )
+    to_binary(&QueryAnswer::GetAllClaimed {
+        result: all_balances,
+    })
 }
 
 fn check_if_admin(config_admin: &Addr, account: &Addr) -> StdResult<()> {
@@ -983,7 +986,7 @@ mod tests {
     use serde::Deserialize;
 
     use crate::msg::ResponseStatus;
-    use crate::msg::{InitConfig, InitialBalance};
+    use crate::msg::{InitConfig, WalletBalances};
     use crate::storage::claim::Claim as ClaimAmount;
     use crate::storage::expiration::Duration;
     use crate::viewing_key_obj::ViewingKeyObj;
@@ -995,7 +998,7 @@ mod tests {
     // Helper functions
 
     fn init_helper(
-        initial_balances: Vec<InitialBalance>,
+        initial_balances: Vec<WalletBalances>,
     ) -> (
         StdResult<Response>,
         OwnedDeps<MockStorage, MockApi, MockQuerier>,
@@ -1021,7 +1024,7 @@ mod tests {
     }
 
     fn init_helper_with_config(
-        initial_balances: Vec<InitialBalance>,
+        initial_balances: Vec<WalletBalances>,
         min_stake_amount: Uint128,
         unbonding_period: Duration,
         contract_bal: u128,
@@ -1060,10 +1063,10 @@ mod tests {
     fn init_helper_with_airdrop(
         total_amount: u128,
     ) -> (Vec<u8>, OwnedDeps<MockStorage, MockApi, MockQuerier>) {
-        let (init_result, deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("admin".to_string()),
-            amount: Uint128::new(total_amount),
-            staked_amount: Uint128::new(0),
+        let (init_result, deps) = init_helper(vec![WalletBalances {
+            address: "admin".to_string(),
+            unstaked: total_amount,
+            staked: 0,
         }]);
         assert!(
             init_result.is_ok(),
@@ -1083,6 +1086,56 @@ mod tests {
         .as_bytes();
 
         (test_data.to_owned(), deps)
+    }
+
+    fn init_helper_airdrop_multiple_users(
+        total_amount: u128,
+    ) -> (MultipleData, OwnedDeps<MockStorage, MockApi, MockQuerier>) {
+        let (_init_result, mut deps) = init_helper(vec![WalletBalances {
+            address: "admin".to_string(),
+            unstaked: total_amount,
+            staked: 0,
+        }]);
+        let test_data = "{
+            \"root\": \"b45c1ea28b26adb13e412933c9e055b01fdf7585304b00cd8f1cb220aa6c5e88\",
+            \"accounts\": [
+                 {\"account\": \"wasm1k9hwzxs889jpvd7env8z49gad3a3633vg350tq\",
+                    \"amount\": \"100\",
+                    \"proofs\": [
+                        \"a714186eaedddde26b08b9afda38cf62fdf88d68e3aa0d5a4b55033487fe14a1\",
+                        \"fb57090a813128eeb953a4210dd64ee73d2632b8158231effe2f0a18b2d3b5dd\",
+                        \"c30992d264c74c58b636a31098c6c27a5fc08b3f61b7eafe2a33dcb445822343\"
+                    ]},{\"account\": \"wasm1uy9ucvgerneekxpnfwyfnpxvlsx5dzdpf0mzjd\",
+                    \"amount\": \"1010\",
+                    \"proofs\": [
+                        \"d496b14f0a6207db1c9a1be70d5f3684d3c76f27c0bc75ee979f3e2a71a97ed0\",
+                        \"e3746c7f0e1d1f60708f9e5facaaee77424a8c5f6527f1813f60e8c3755d3b5d\",
+                        \"c30992d264c74c58b636a31098c6c27a5fc08b3f61b7eafe2a33dcb445822343\"
+                    ]},{\"account\": \"wasm1a4x6au55s0fusctyj2ulrxvfpmjcxa92k7ze2v\",
+                    \"amount\": \"10220\",
+                    \"proofs\": [
+                        \"b69c5239d434753af2f6c3eab47f4e78c436f862f14e6989be5c9027c2b6dfe2\",
+                        \"e3746c7f0e1d1f60708f9e5facaaee77424a8c5f6527f1813f60e8c3755d3b5d\",
+                        \"c30992d264c74c58b636a31098c6c27a5fc08b3f61b7eafe2a33dcb445822343\"
+                    ]},{\"account\": \"wasm1ylna88nach9sn5n7qe7u5l6lh7dmt6lp2y63xx\",
+                    \"amount\": \"10333\",
+                    \"proofs\": [\"f89c4ec6a98e26fb5690e50e16e189f9942f0576a5ba711ed75fe01140ddb2af\",\"374f1a32b0a5d5dab16f8fbed8c248e183448732f897002375e0d4ca6e13ad73\"]
+                }]}"
+            .as_bytes();
+        let test_data: MultipleData = from_slice(test_data.clone()).unwrap();
+        let env = mock_env();
+
+        let msg = ExecuteMsg::RegisterMerkleRoot {
+            merkle_root: test_data.root.clone(),
+            expiration: Duration::Time(10000).after(&env.block),
+            start: Duration::Time(1001).after(&env.block),
+            total_amount: Uint128::new(42103),
+        };
+
+        let info = mock_info("admin", &[]);
+        let _res = execute(deps.as_mut(), env, info, msg).unwrap();
+
+        (test_data, deps)
     }
 
     fn extract_error_msg<T: Any>(error: StdResult<T>) -> String {
@@ -1108,7 +1161,7 @@ mod tests {
 
         match handle_result {
             ExecuteAnswer::Stake { status }
-            | ExecuteAnswer::Claim { status }
+            | ExecuteAnswer::Claim { status, .. }
             | ExecuteAnswer::Unstake { status }
             | ExecuteAnswer::Transfer { status }
             | ExecuteAnswer::RegisterReceive { status }
@@ -1129,10 +1182,10 @@ mod tests {
 
     #[test]
     fn test_init_sanity() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("lebron".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
+        let (init_result, mut deps) = init_helper(vec![WalletBalances {
+            address: "lebron".to_string(),
+            unstaked: 5000u128,
+            staked: 15000u128,
         }]);
         assert_eq!(init_result.unwrap(), Response::default());
 
@@ -1159,10 +1212,10 @@ mod tests {
     #[test]
     fn test_init_with_config_sanity() {
         let (init_result, mut deps) = init_helper_with_config(
-            vec![InitialBalance {
-                address: Addr::unchecked("lebron".to_string()),
-                amount: Uint128::new(5000),
-                staked_amount: Uint128::new(15000),
+            vec![WalletBalances {
+                address: "lebron".to_string(),
+                unstaked: 5000u128,
+                staked: 15000u128,
             }],
             Uint128::new(100),
             Duration::Time(60),
@@ -1192,10 +1245,10 @@ mod tests {
 
     #[test]
     fn test_total_supply_overflow() {
-        let (init_result, _deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("lebron".to_string()),
-            amount: Uint128::new(u128::MAX),
-            staked_amount: Uint128::new(0),
+        let (init_result, _deps) = init_helper(vec![WalletBalances {
+            address: "lebron".to_string(),
+            unstaked: u128::MAX,
+            staked: 0,
         }]);
         assert!(
             init_result.is_ok(),
@@ -1204,15 +1257,15 @@ mod tests {
         );
 
         let (init_result, _deps) = init_helper(vec![
-            InitialBalance {
-                address: Addr::unchecked("lebron".to_string()),
-                amount: Uint128::new(u128::MAX),
-                staked_amount: Uint128::new(0),
+            WalletBalances {
+                address: "lebron".to_string(),
+                unstaked: u128::MAX,
+                staked: 0,
             },
-            InitialBalance {
-                address: Addr::unchecked("giannis".to_string()),
-                amount: Uint128::new(1),
-                staked_amount: Uint128::new(1),
+            WalletBalances {
+                address: "giannis".to_string(),
+                unstaked: 1,
+                staked: 1,
             },
         ]);
         let error = extract_error_msg(init_result);
@@ -1226,10 +1279,10 @@ mod tests {
 
     #[test]
     fn test_handle_transfer() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("daniel".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
+        let (init_result, mut deps) = init_helper(vec![WalletBalances {
+            address: "daniel".to_string(),
+            unstaked: 5000u128,
+            staked: 15000u128,
         }]);
         assert!(
             init_result.is_ok(),
@@ -1271,10 +1324,10 @@ mod tests {
 
     #[test]
     fn test_handle_create_viewing_key() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("arthur".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
+        let (init_result, mut deps) = init_helper(vec![WalletBalances {
+            address: "arthur".to_string(),
+            unstaked: 5000u128,
+            staked: 15000u128,
         }]);
         assert!(
             init_result.is_ok(),
@@ -1308,10 +1361,10 @@ mod tests {
 
     #[test]
     fn test_handle_set_viewing_key() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("anonymous".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
+        let (init_result, mut deps) = init_helper(vec![WalletBalances {
+            address: "anonymous".to_string(),
+            unstaked: 5000u128,
+            staked: 15000u128,
         }]);
         assert!(
             init_result.is_ok(),
@@ -1358,10 +1411,10 @@ mod tests {
 
     #[test]
     fn test_handle_transfer_from() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("bob".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
+        let (init_result, mut deps) = init_helper(vec![WalletBalances {
+            address: "bob".to_string(),
+            unstaked: 5000u128,
+            staked: 15000u128,
         }]);
         assert!(
             init_result.is_ok(),
@@ -1399,10 +1452,10 @@ mod tests {
 
     #[test]
     fn test_handle_change_admin() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("bobby".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
+        let (init_result, mut deps) = init_helper(vec![WalletBalances {
+            address: "bobby".to_string(),
+            unstaked: 5000u128,
+            staked: 15000u128,
         }]);
         assert!(
             init_result.is_ok(),
@@ -1430,10 +1483,10 @@ mod tests {
 
     #[test]
     fn test_handle_set_contract_status() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("admin".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
+        let (init_result, mut deps) = init_helper(vec![WalletBalances {
+            address: "admin".to_string(),
+            unstaked: 5000u128,
+            staked: 15000u128,
         }]);
         assert!(
             init_result.is_ok(),
@@ -1465,10 +1518,10 @@ mod tests {
     #[test]
     fn test_handle_unstake() {
         let (init_result, mut deps) = init_helper_with_config(
-            vec![InitialBalance {
-                address: Addr::unchecked("butler".to_string()),
-                amount: Uint128::new(5000),
-                staked_amount: Uint128::new(15000),
+            vec![WalletBalances {
+                address: "butler".to_string(),
+                unstaked: 5000u128,
+                staked: 15000u128,
             }],
             Uint128::new(100),
             Duration::Time(60),
@@ -1481,10 +1534,10 @@ mod tests {
         );
 
         let (init_result_no_reserve, mut deps_no_reserve) = init_helper_with_config(
-            vec![InitialBalance {
-                address: Addr::unchecked("butler".to_string()),
-                amount: Uint128::new(0),
-                staked_amount: Uint128::new(0),
+            vec![WalletBalances {
+                address: "butler".to_string(),
+                unstaked: 0,
+                staked: 0,
             }],
             Uint128::new(100),
             Duration::Time(60),
@@ -1541,10 +1594,10 @@ mod tests {
     #[test]
     fn test_token_claim() {
         let (init_result, mut deps) = init_helper_with_config(
-            vec![InitialBalance {
-                address: Addr::unchecked("lebron".to_string()),
-                amount: Uint128::new(5000),
-                staked_amount: Uint128::new(0),
+            vec![WalletBalances {
+                address: "lebron".to_string(),
+                unstaked: 5000u128,
+                staked: 0,
             }],
             Uint128::new(100),
             Duration::Time(60),
@@ -1621,10 +1674,10 @@ mod tests {
         let info = mock_info("lebron", &[]);
         // query claim
         let query_claim_msg = QueryMsg::Claim {
-            address: info.sender,
+            address: info.clone().sender,
             key: vk.0,
         };
-        let query_response = query(deps.as_ref(), mock_env(), query_claim_msg).unwrap();
+        let query_response = query(deps.as_ref(), mock_env(), info, query_claim_msg).unwrap();
         let claims = match from_binary(&query_response).unwrap() {
             QueryAnswer::Claim { amounts, .. } => amounts,
             _ => panic!("Unexpected result from claim query"),
@@ -1658,10 +1711,10 @@ mod tests {
     #[test]
     fn test_handle_stake() {
         let (init_result, mut deps) = init_helper_with_config(
-            vec![InitialBalance {
-                address: Addr::unchecked("excis".to_string()),
-                amount: Uint128::new(5000),
-                staked_amount: Uint128::new(15000),
+            vec![WalletBalances {
+                address: "excis".to_string(),
+                unstaked: 5000u128,
+                staked: 15000u128,
             }],
             Uint128::new(100),
             Duration::Time(60),
@@ -1694,10 +1747,10 @@ mod tests {
     fn test_handle_admin_commands() {
         let admin_err = "Admin commands can only be run from admin address".to_string();
         let (init_result, mut deps) = init_helper_with_config(
-            vec![InitialBalance {
-                address: Addr::unchecked("lestat".to_string()),
-                amount: Uint128::new(5000),
-                staked_amount: Uint128::new(15000),
+            vec![WalletBalances {
+                address: "lestat".to_string(),
+                unstaked: 5000u128,
+                staked: 15000u128,
             }],
             Uint128::new(100),
             Duration::Time(60),
@@ -1731,10 +1784,10 @@ mod tests {
     #[test]
     fn test_handle_pause_with_withdrawals() {
         let (init_result, mut deps) = init_helper_with_config(
-            vec![InitialBalance {
-                address: Addr::unchecked("natachatte".to_string()),
-                amount: Uint128::new(5000),
-                staked_amount: Uint128::new(15000),
+            vec![WalletBalances {
+                address: "natachatte".to_string(),
+                unstaked: 5000u128,
+                staked: 15000u128,
             }],
             Uint128::new(100),
             Duration::Time(60),
@@ -1788,10 +1841,10 @@ mod tests {
 
     #[test]
     fn test_handle_pause_all() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("francis".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
+        let (init_result, mut deps) = init_helper(vec![WalletBalances {
+            address: "francis".to_string(),
+            unstaked: 5000u128,
+            staked: 15000u128,
         }]);
         assert!(
             init_result.is_ok(),
@@ -1848,10 +1901,10 @@ mod tests {
 
     #[test]
     fn test_authenticated_queries() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("giannis".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
+        let (init_result, mut deps) = init_helper(vec![WalletBalances {
+            address: "giannis".to_string(),
+            unstaked: 5000u128,
+            staked: 15000u128,
         }]);
         assert!(
             init_result.is_ok(),
@@ -1863,7 +1916,8 @@ mod tests {
             address: Addr::unchecked("giannis".to_string()),
             key: "no_vk_yet".to_string(),
         };
-        let query_result = query(deps.as_ref(), mock_env(), no_vk_yet_query_msg);
+        let info = mock_info("giannis", &[]);
+        let query_result = query(deps.as_ref(), mock_env(), info.clone(), no_vk_yet_query_msg);
         let error = extract_error_msg(query_result);
         assert_eq!(
             error,
@@ -1874,8 +1928,8 @@ mod tests {
             entropy: "34".to_string(),
             padding: None,
         };
-        let info = mock_info("giannis", &[]);
-        let handle_response = execute(deps.as_mut(), mock_env(), info, create_vk_msg).unwrap();
+        let handle_response =
+            execute(deps.as_mut(), mock_env(), info.clone(), create_vk_msg).unwrap();
         let vk = match from_binary(&handle_response.data.unwrap()).unwrap() {
             ExecuteAnswer::CreateViewingKey { key } => key,
             _ => panic!("Unexpected result from handle"),
@@ -1886,7 +1940,8 @@ mod tests {
             key: vk.0,
         };
 
-        let query_response = query(deps.as_ref(), mock_env(), query_balance_msg).unwrap();
+        let query_response =
+            query(deps.as_ref(), mock_env(), info.clone(), query_balance_msg).unwrap();
         let balance = match from_binary(&query_response).unwrap() {
             QueryAnswer::Balance {
                 amount,
@@ -1900,7 +1955,7 @@ mod tests {
             address: Addr::unchecked("giannis".to_string()),
             key: "wrong_vk".to_string(),
         };
-        let query_result = query(deps.as_ref(), mock_env(), wrong_vk_query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), info, wrong_vk_query_msg);
         let error = extract_error_msg(query_result);
         assert_eq!(
             error,
@@ -1910,13 +1965,14 @@ mod tests {
 
     #[test]
     fn test_query_token_info() {
-        let (_init_result, deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("giannis".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
+        let (_init_result, deps) = init_helper(vec![WalletBalances {
+            address: "giannis".to_string(),
+            unstaked: 5000u128,
+            staked: 15000u128,
         }]);
         let query_msg = QueryMsg::TokenInfo {};
-        let query_result = query(deps.as_ref(), mock_env(), query_msg);
+        let info = mock_info("giannis", &[]);
+        let query_result = query(deps.as_ref(), mock_env(), info, query_msg);
         assert!(
             query_result.is_ok(),
             "Init failed: {}",
@@ -1943,7 +1999,8 @@ mod tests {
     fn test_query_token_config() {
         let (_init_result, deps) = init_helper(vec![]);
         let query_msg = QueryMsg::TokenConfig {};
-        let query_result = query(deps.as_ref(), mock_env(), query_msg);
+        let info = mock_info("giannis", &[]);
+        let query_result = query(deps.as_ref(), mock_env(), info, query_msg);
         assert!(
             query_result.is_ok(),
             "Init failed: {}",
@@ -1964,10 +2021,10 @@ mod tests {
 
     #[test]
     fn test_query_balance() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("michael".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
+        let (init_result, mut deps) = init_helper(vec![WalletBalances {
+            address: "michael".to_string(),
+            unstaked: 5000u128,
+            staked: 15000u128,
         }]);
         assert!(
             init_result.is_ok(),
@@ -1981,7 +2038,7 @@ mod tests {
         };
         let info = mock_info("michael", &[]);
 
-        let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
+        let handle_result = execute(deps.as_mut(), mock_env(), info.clone(), handle_msg);
 
         let unwrapped_result: ExecuteAnswer =
             from_binary(&handle_result.unwrap().data.unwrap()).unwrap();
@@ -1994,7 +2051,7 @@ mod tests {
             address: Addr::unchecked("michael".to_string()),
             key: "wrong_key".to_string(),
         };
-        let query_result = query(deps.as_ref(), mock_env(), query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), info.clone(), query_msg);
         let error = extract_error_msg(query_result);
         assert!(error.contains("Wrong viewing key"));
 
@@ -2002,7 +2059,7 @@ mod tests {
             address: Addr::unchecked("michael".to_string()),
             key: "key".to_string(),
         };
-        let query_result = query(deps.as_ref(), mock_env(), query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), info, query_msg);
         let balance = match from_binary(&query_result.unwrap()).unwrap() {
             QueryAnswer::Balance {
                 amount,
@@ -2015,10 +2072,10 @@ mod tests {
 
     #[test]
     fn test_query_transfer_history() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("jean".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
+        let (init_result, mut deps) = init_helper(vec![WalletBalances {
+            address: "jean".to_string(),
+            unstaked: 5000u128,
+            staked: 15000u128,
         }]);
         assert!(
             init_result.is_ok(),
@@ -2068,7 +2125,7 @@ mod tests {
         };
         let info = mock_info("jean", &[]);
 
-        let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
+        let handle_result = execute(deps.as_mut(), mock_env(), info.clone(), handle_msg);
 
         let result = handle_result.unwrap();
         assert!(ensure_success(result));
@@ -2079,9 +2136,7 @@ mod tests {
             page: None,
             page_size: 0,
         };
-        let query_result = query(deps.as_ref(), mock_env(), query_msg);
-        // let a: QueryAnswer = from_binary(&query_result.unwrap()).unwrap();
-        // println!("{:?}", a);
+        let query_result = query(deps.as_ref(), mock_env(), info.clone(), query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
             QueryAnswer::TransferHistory { txs, .. } => txs,
             _ => panic!("Unexpected"),
@@ -2094,7 +2149,7 @@ mod tests {
             page: None,
             page_size: 10,
         };
-        let query_result = query(deps.as_ref(), mock_env(), query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), info.clone(), query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
             QueryAnswer::TransferHistory { txs, .. } => txs,
             _ => panic!("Unexpected"),
@@ -2107,7 +2162,7 @@ mod tests {
             page: None,
             page_size: 2,
         };
-        let query_result = query(deps.as_ref(), mock_env(), query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), info.clone(), query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
             QueryAnswer::TransferHistory { txs, .. } => txs,
             _ => panic!("Unexpected"),
@@ -2120,7 +2175,7 @@ mod tests {
             page: Some(1),
             page_size: 2,
         };
-        let query_result = query(deps.as_ref(), mock_env(), query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), info.clone(), query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
             QueryAnswer::TransferHistory { txs, .. } => txs,
             _ => panic!("Unexpected"),
@@ -2131,10 +2186,10 @@ mod tests {
     #[test]
     fn test_query_transaction_history() {
         let (init_result, mut deps) = init_helper_with_config(
-            vec![InitialBalance {
-                address: Addr::unchecked("bob".to_string()),
-                amount: Uint128::new(10000),
-                staked_amount: Uint128::new(15000),
+            vec![WalletBalances {
+                address: "bob".to_string(),
+                unstaked: 10000u128,
+                staked: 15000u128,
             }],
             Uint128::new(100),
             Duration::Time(60),
@@ -2216,7 +2271,7 @@ mod tests {
         };
         let info = mock_info("bob", &[]);
 
-        let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
+        let handle_result = execute(deps.as_mut(), mock_env(), info.clone(), handle_msg);
 
         let result = handle_result.unwrap();
         assert!(ensure_success(result));
@@ -2227,7 +2282,7 @@ mod tests {
             page: None,
             page_size: 10,
         };
-        let query_result = query(deps.as_ref(), mock_env(), query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), info.clone(), query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
             QueryAnswer::TransferHistory { txs, .. } => txs,
             _ => panic!("Unexpected"),
@@ -2240,7 +2295,7 @@ mod tests {
             page: None,
             page_size: 10,
         };
-        let query_result = query(deps.as_ref(), mock_env(), query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), info, query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
             QueryAnswer::TransactionHistory { txs, .. } => txs,
             other => panic!("Unexpected: {:?}", other),
@@ -2322,10 +2377,10 @@ mod tests {
 
     #[test]
     fn test_execute_register_merkle_root() {
-        let (init_result, mut deps) = init_helper(vec![InitialBalance {
-            address: Addr::unchecked("francisco".to_string()),
-            amount: Uint128::new(5000),
-            staked_amount: Uint128::new(15000),
+        let (init_result, mut deps) = init_helper(vec![WalletBalances {
+            address: "francisco".to_string(),
+            unstaked: 5000u128,
+            staked: 15000u128,
         }]);
         assert!(
             init_result.is_ok(),
@@ -2349,13 +2404,13 @@ mod tests {
         };
 
         // from unauthorized address
-        let res = execute(deps.as_mut(), env.clone(), info, msg.clone());
+        let res = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone());
         let error = extract_error_msg(res);
         assert!(error.contains("Admin commands can only be run from admin address"));
 
         // from admin address
         let info = mock_info("admin", &[]);
-        let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+        let res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
 
         let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
         assert_eq!(
@@ -2370,7 +2425,12 @@ mod tests {
             .unwrap(),
         );
 
-        let query_result = query(deps.as_ref(), env.clone(), QueryMsg::LatestStage {});
+        let query_result = query(
+            deps.as_ref(),
+            env.clone(),
+            info.clone(),
+            QueryMsg::LatestStage {},
+        );
         let query_answer: QueryAnswer = from_binary(&query_result.unwrap()).unwrap();
 
         assert_eq!(
@@ -2378,7 +2438,12 @@ mod tests {
             to_binary(&QueryAnswer::AirdropStage { stage: 1 }).unwrap(),
         );
 
-        let query_result = query(deps.as_ref(), env, QueryMsg::MerkleRoot { stage: 1 });
+        let query_result = query(
+            deps.as_ref(),
+            env,
+            info.clone(),
+            QueryMsg::MerkleRoot { stage: 1 },
+        );
         let query_answer: QueryAnswer = from_binary(&query_result.unwrap()).unwrap();
 
         match query_answer {
@@ -2453,7 +2518,7 @@ mod tests {
         let unwrapped_result: ExecuteAnswer = from_binary(&res.unwrap().data.unwrap()).unwrap();
         assert_eq!(
             to_binary(&unwrapped_result).unwrap(),
-            to_binary(&ExecuteAnswer::AirdropClaim {
+            to_binary(&ExecuteAnswer::Claim {
                 status: Success,
                 amount: test_data.amount.u128()
             })
@@ -2466,7 +2531,7 @@ mod tests {
 
         // Check address is claimed
         let claim_airdrops =
-            ClaimAirdrops::get(deps.as_mut().storage, 1, test_data.account.to_string()).unwrap();
+            ClaimedAirdrops::get(deps.as_mut().storage, 1, test_data.account.to_string()).unwrap();
         assert_eq!(true, claim_airdrops.0);
         assert_eq!(test_data.amount.u128(), claim_airdrops.1);
 
@@ -2524,7 +2589,7 @@ mod tests {
         let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
         assert_eq!(
             to_binary(&unwrapped_result).unwrap(),
-            to_binary(&ExecuteAnswer::AirdropClaim {
+            to_binary(&ExecuteAnswer::Claim {
                 status: Success,
                 amount: test_data_2.amount.u128()
             })
@@ -2542,45 +2607,8 @@ mod tests {
 
     #[test]
     fn test_claim_airdrop_multiple_users() {
-        let (_, mut deps) = init_helper_with_airdrop(21663);
-        let test_data = "{
-            \"root\": \"b45c1ea28b26adb13e412933c9e055b01fdf7585304b00cd8f1cb220aa6c5e88\",
-            \"accounts\": [
-                 {\"account\": \"wasm1k9hwzxs889jpvd7env8z49gad3a3633vg350tq\",
-                    \"amount\": \"100\",
-                    \"proofs\": [
-                        \"a714186eaedddde26b08b9afda38cf62fdf88d68e3aa0d5a4b55033487fe14a1\",
-                        \"fb57090a813128eeb953a4210dd64ee73d2632b8158231effe2f0a18b2d3b5dd\",
-                        \"c30992d264c74c58b636a31098c6c27a5fc08b3f61b7eafe2a33dcb445822343\"
-                    ]},{\"account\": \"wasm1uy9ucvgerneekxpnfwyfnpxvlsx5dzdpf0mzjd\",
-                    \"amount\": \"1010\",
-                    \"proofs\": [
-                        \"d496b14f0a6207db1c9a1be70d5f3684d3c76f27c0bc75ee979f3e2a71a97ed0\",
-                        \"e3746c7f0e1d1f60708f9e5facaaee77424a8c5f6527f1813f60e8c3755d3b5d\",
-                        \"c30992d264c74c58b636a31098c6c27a5fc08b3f61b7eafe2a33dcb445822343\"
-                    ]},{\"account\": \"wasm1a4x6au55s0fusctyj2ulrxvfpmjcxa92k7ze2v\",
-                    \"amount\": \"10220\",
-                    \"proofs\": [
-                        \"b69c5239d434753af2f6c3eab47f4e78c436f862f14e6989be5c9027c2b6dfe2\",
-                        \"e3746c7f0e1d1f60708f9e5facaaee77424a8c5f6527f1813f60e8c3755d3b5d\",
-                        \"c30992d264c74c58b636a31098c6c27a5fc08b3f61b7eafe2a33dcb445822343\"
-                    ]},{\"account\": \"wasm1ylna88nach9sn5n7qe7u5l6lh7dmt6lp2y63xx\",
-                    \"amount\": \"10333\",
-                    \"proofs\": [\"f89c4ec6a98e26fb5690e50e16e189f9942f0576a5ba711ed75fe01140ddb2af\",\"374f1a32b0a5d5dab16f8fbed8c248e183448732f897002375e0d4ca6e13ad73\"]
-                }]}"
-            .as_bytes();
-        let test_data: MultipleData = from_slice(test_data).unwrap();
+        let (test_data, mut deps) = init_helper_airdrop_multiple_users(21663);
         let mut env = mock_env();
-
-        let msg = ExecuteMsg::RegisterMerkleRoot {
-            merkle_root: test_data.root,
-            expiration: Duration::Time(10000).after(&env.block),
-            start: Duration::Time(1001).after(&env.block),
-            total_amount: Uint128::new(42103),
-        };
-
-        let info = mock_info("admin", &[]);
-        let _res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
 
         // Check total claimed before claiming anything
         let total_claimed = AirdropStagesTotalAmountCaimed::load(deps.as_ref().storage, 1);
@@ -2602,7 +2630,7 @@ mod tests {
             let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
             assert_eq!(
                 to_binary(&unwrapped_result).unwrap(),
-                to_binary(&ExecuteAnswer::AirdropClaim {
+                to_binary(&ExecuteAnswer::Claim {
                     status: Success,
                     amount: account.amount.u128()
                 })
@@ -2613,6 +2641,38 @@ mod tests {
         // Check total claimed after all claims
         let total_claimed = AirdropStagesTotalAmountCaimed::load(deps.as_ref().storage, 1);
         assert_eq!(total_claimed, 21_663);
+
+        // Check history
+        dbg!(ClaimedAirdrops::get_all(&mut deps.storage));
+        dbg!(ClaimedAirdrops::get_all(&mut deps.storage));
+        dbg!(ClaimedAirdrops::get_all(&mut deps.storage));
+        dbg!(ClaimedAirdrops::get_all(&mut deps.storage));
+        dbg!(ClaimedAirdrops::get_all(&mut deps.storage));
+        dbg!(ClaimedAirdrops::get_all(&mut deps.storage));
+
+        let claimed_airdrops = ClaimedAirdrops::get_all(&mut deps.storage);
+        assert_eq!(4, claimed_airdrops.len());
+
+        // Check history from command
+        let claimed_msg = QueryMsg::GetAllClaimed {};
+        // when not admin
+        let info = mock_info("roberto", &[]);
+        let query_result = query(deps.as_ref(), mock_env(), info, claimed_msg.clone());
+        let error = extract_error_msg(query_result);
+        assert!(error.contains(
+            "This is an admin command. Admin commands can only be run from admin address"
+        ));
+
+        // when admin
+        let info = mock_info("admin", &[]);
+        let query_response =
+            query(deps.as_ref(), mock_env(), info.clone(), claimed_msg.clone()).unwrap();
+        let claimed_balances = match from_binary(&query_response).unwrap() {
+            QueryAnswer::GetAllClaimed { result } => result,
+            _ => panic!("Unexpected result from claim query"),
+        };
+
+        assert_eq!(4, claimed_balances.len());
     }
 
     #[test]
@@ -2675,13 +2735,18 @@ mod tests {
         };
         let _res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
 
-        let msg = ExecuteMsg::WithdrawUnclaimed {
+        let withdraw_unclaimed_msg = ExecuteMsg::WithdrawUnclaimed {
             stage: 1u8,
             address: withdraw_to.to_string(),
         };
 
         // Can't withdraw not started stage
-        let handle_result = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone());
+        let handle_result = execute(
+            deps.as_mut(),
+            env.clone(),
+            info.clone(),
+            withdraw_unclaimed_msg.clone(),
+        );
         let error = extract_error_msg(handle_result);
         assert!(error.contains("Airdrop has not started"));
 
@@ -2689,7 +2754,12 @@ mod tests {
         env.block.time = env.block.time.plus_seconds(101);
 
         // Can't withdraw not expired stage
-        let handle_result = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone());
+        let handle_result = execute(
+            deps.as_mut(),
+            env.clone(),
+            info.clone(),
+            withdraw_unclaimed_msg.clone(),
+        );
         let error = extract_error_msg(handle_result);
         assert!(error.contains("Airdrop has not expired"));
 
@@ -2697,7 +2767,12 @@ mod tests {
         env.block.time = env.block.time.plus_seconds(899);
 
         // Can't withdraw not expired stage
-        let handle_result = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone());
+        let handle_result = execute(
+            deps.as_mut(),
+            env.clone(),
+            info.clone(),
+            withdraw_unclaimed_msg.clone(),
+        );
         let error = extract_error_msg(handle_result);
         assert!(error.contains("Airdrop has not expired"));
 
@@ -2712,7 +2787,7 @@ mod tests {
         let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
         assert_eq!(
             to_binary(&unwrapped_result).unwrap(),
-            to_binary(&ExecuteAnswer::AirdropClaim {
+            to_binary(&ExecuteAnswer::Claim {
                 status: Success,
                 amount: test_data.amount.u128()
             })
@@ -2723,11 +2798,17 @@ mod tests {
         env.block.time = env.block.time.plus_seconds(1);
 
         // Can withdraw expired stage
-        let res = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone()).unwrap();
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            info.clone(),
+            withdraw_unclaimed_msg.clone(),
+        )
+        .unwrap();
         let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
         assert_eq!(
             to_binary(&unwrapped_result).unwrap(),
-            to_binary(&ExecuteAnswer::AirdropClaim {
+            to_binary(&ExecuteAnswer::WithdrawUnclaimed {
                 amount: 4900u128,
                 status: Success
             })
@@ -2782,10 +2863,16 @@ mod tests {
         };
         let query_is_claim_msg = QueryMsg::IsAirdropClaimed {
             key: key.0,
-            address: info.sender,
+            address: info.clone().sender,
             stage: 1,
         };
-        let query_response = query(deps.as_ref(), mock_env(), query_is_claim_msg.clone()).unwrap();
+        let query_response = query(
+            deps.as_ref(),
+            mock_env(),
+            info.clone(),
+            query_is_claim_msg.clone(),
+        )
+        .unwrap();
         let (claimed, amount) = match from_binary(&query_response).unwrap() {
             QueryAnswer::AirdropClaimed { claimed, amount } => (claimed, amount),
             _ => panic!("Unexpected result from claim query"),
@@ -2809,7 +2896,7 @@ mod tests {
         let unwrapped_result: ExecuteAnswer = from_binary(&res.data.unwrap()).unwrap();
         assert_eq!(
             to_binary(&unwrapped_result).unwrap(),
-            to_binary(&ExecuteAnswer::AirdropClaim {
+            to_binary(&ExecuteAnswer::Claim {
                 status: Success,
                 amount: test_data.amount.u128()
             })
@@ -2817,7 +2904,7 @@ mod tests {
         );
 
         // recheck is_claimed
-        let query_response = query(deps.as_ref(), env, query_is_claim_msg).unwrap();
+        let query_response = query(deps.as_ref(), env, info.clone(), query_is_claim_msg).unwrap();
         let (claimed, amount) = match from_binary(&query_response).unwrap() {
             QueryAnswer::AirdropClaimed { claimed, amount } => (claimed, amount),
             _ => panic!("Unexpected result from claim query"),
@@ -2884,8 +2971,60 @@ mod tests {
     }
 
     #[test]
-    fn test_get_all_ibex_balances() {}
+    fn test_get_all_ibex_balances() {
+        let init_balances = vec![
+            WalletBalances {
+                address: "michael".to_string(),
+                unstaked: 5000u128,
+                staked: 15000u128,
+            },
+            WalletBalances {
+                address: "josé".to_string(),
+                unstaked: 2345u128,
+                staked: 5432u128,
+            },
+            WalletBalances {
+                address: "jean-pierre".to_string(),
+                unstaked: 1111u128,
+                staked: 1111u128,
+            },
+            WalletBalances {
+                address: "raoul".to_string(),
+                unstaked: 3333u128,
+                staked: 4444u128,
+            },
+            WalletBalances {
+                address: "antonio".to_string(),
+                unstaked: 5555u128,
+                staked: 6666u128,
+            },
+        ];
+        let (init_result, deps) = init_helper(init_balances.clone());
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
 
-    #[test]
-    fn get_all_ibex_claims() {}
+        let query_msg = QueryMsg::GetAll {};
+
+        // when not admin
+        let info = mock_info("michael", &[]);
+        let query_result = query(deps.as_ref(), mock_env(), info, query_msg.clone());
+        let error = extract_error_msg(query_result);
+        assert!(error.contains(
+            "This is an admin command. Admin commands can only be run from admin address"
+        ));
+
+        // when admin
+        let info = mock_info("admin", &[]);
+        let query_response = query(deps.as_ref(), mock_env(), info, query_msg).unwrap();
+
+        let balances = match from_binary(&query_response).unwrap() {
+            QueryAnswer::GetAll { result } => result,
+            _ => panic!("Unexpected result from claim query"),
+        };
+
+        assert_eq!(init_balances, balances);
+    }
 }

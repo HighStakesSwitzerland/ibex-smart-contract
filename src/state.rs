@@ -117,15 +117,15 @@ impl BalancesStore {
     }
 
     pub fn get_all(store: &dyn Storage) -> Vec<WalletBalances> {
-        let page_size = 100u32;
-        let values = BALANCES.paging(store, 0, page_size);
+        let iterator = BALANCES.iter(store).unwrap();
         let mut balances = Vec::new();
 
-        for (_, (key_value, value)) in values.unwrap().iter().enumerate() {
+        for item in iterator {
+            let (addr, amount) = item.unwrap();
             let bal: WalletBalances = WalletBalances {
-                address: key_value.to_string(),
-                unstaked: *value,
-                staked: StakedBalancesStore::load(store, key_value),
+                address: addr.to_string(),
+                unstaked: amount,
+                staked: StakedBalancesStore::load(store, &addr),
             };
             balances.push(bal);
         }
@@ -160,27 +160,26 @@ impl MerkleRoots {
     }
 }
 
-pub struct ClaimAirdrops {}
-impl ClaimAirdrops {
+pub struct ClaimedAirdrops {}
+impl ClaimedAirdrops {
     pub fn get(store: &dyn Storage, stage: u8, addr: String) -> Option<(bool, u128)> {
         CLAIMED_AIRDROP.get(store, &(addr, stage))
     }
 
     pub fn get_all(store: &dyn Storage) -> Vec<WalletClaimBalances> {
-        let page_size = 100u32;
-        let values = CLAIMED_AIRDROP.paging(store, 0, page_size);
+        let iterator = CLAIMED_AIRDROP.iter(store).unwrap();
         let mut balances = Vec::new();
 
-        for (_, ((wallet, stage), (claimed, amount))) in values.unwrap().iter().enumerate() {
+        for item in iterator {
+            let ((addr, stage), (claimed, amount)) = item.unwrap();
             let bal: WalletClaimBalances = WalletClaimBalances {
-                address: wallet.to_string(),
-                stage: *stage,
-                claimed: *claimed,
-                amount: *amount,
+                address: addr,
+                stage,
+                claimed,
+                amount,
             };
             balances.push(bal);
         }
-
         balances
     }
 

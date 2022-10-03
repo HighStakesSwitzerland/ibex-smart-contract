@@ -34,8 +34,7 @@ pub static BALANCES: Keymap<Addr, u128> = Keymap::new(PREFIX_BALANCES);
 pub static STAKED_BALANCES: Keymap<Addr, u128> = Keymap::new(PREFIX_STAKED_BALANCES);
 
 pub static MERKLE_ROOT: Keymap<u8, String> = Keymap::new(PREFIX_MERKLE_ROOT);
-pub static CLAIMED_AIRDROP: Keymap<(String, u8), (bool, u128)> =
-    Keymap::new(PREFIX_CLAIMED_AIRDROP);
+pub static CLAIMED_AIRDROP: Keymap<Vec<u8>, u128> = Keymap::new(PREFIX_CLAIMED_AIRDROP);
 pub static LATEST_STAGE: Item<u8> = Item::new(PREFIX_LATEST_STAGE);
 pub static STAGE_EXPIRATION: Keymap<u8, String> = Keymap::new(PREFIX_STAGE_EXPIRATION);
 pub static STAGE_START: Keymap<u8, String> = Keymap::new(PREFIX_STAGE_START);
@@ -162,8 +161,10 @@ impl MerkleRoots {
 
 pub struct ClaimedAirdrops {}
 impl ClaimedAirdrops {
-    pub fn get(store: &dyn Storage, stage: u8, addr: String) -> Option<(bool, u128)> {
-        CLAIMED_AIRDROP.get(store, &(addr, stage))
+    pub fn get(store: &dyn Storage, stage: u8, addr: String) -> Option<u128> {
+        let mut key = addr.clone().into_bytes();
+        key.push(stage);
+        CLAIMED_AIRDROP.get(store, &key)
     }
 
     pub fn get_all(store: &dyn Storage) -> Vec<WalletClaimBalances> {
@@ -171,11 +172,15 @@ impl ClaimedAirdrops {
         let mut balances = Vec::new();
 
         for item in iterator {
-            let ((addr, stage), (claimed, amount)) = item.unwrap();
+            let (key, amount) = item.unwrap();
+            let mut key_copy = key.clone();
+            let stage = key_copy.pop().unwrap();
+            let address = std::str::from_utf8(key_copy.as_slice())
+                .unwrap()
+                .to_string();
             let bal: WalletClaimBalances = WalletClaimBalances {
-                address: addr,
+                address,
                 stage,
-                claimed,
                 amount,
             };
             balances.push(bal);
@@ -189,7 +194,10 @@ impl ClaimedAirdrops {
         addr: String,
         amount: u128,
     ) -> StdResult<()> {
-        CLAIMED_AIRDROP.insert(store, &(addr, stage), &(true, amount))
+        let mut key = addr.clone().into_bytes();
+        key.push(stage);
+        CLAIMED_AIRDROP.insert(store, &key, &amount)?;
+        Ok(())
     }
 }
 pub struct AirdropStages {}

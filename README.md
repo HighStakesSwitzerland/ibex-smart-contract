@@ -9,7 +9,7 @@ At the time of token creation you may configure:
 
 To create a new token:
 
-```secretcli tx compute instantiate <contract_number> --from a --label IBEX '{"name": "sibex", "symbol": "IBEX", "label": "IBEX", "decimals": 0, "initial_balances": [{"address": "secret1ap26qrlp8mcq2pg6r47w43l0y8zkqm8a450s03", "amount": "100000", "staked_amount": "100"}], "prng_seed": "dG90b2xhcHJhbGluZQo=", "config": { "unbonding_period": {"time": 60}, "min_stake_amount": "1000"}}'```
+```secretcli tx compute instantiate <contract_number> --from a --label IBEX '{"name": "sibex", "symbol": "IBEX", "label": "IBEX", "decimals": 0, "admin": <admin_wallet>, "initial_balances": [{"address": "secret1ap26qrlp8mcq2pg6r47w43l0y8zkqm8a450s03", "unstaked": "100000", "staked": "100"}], "prng_seed": "dG90b2xhcHJhbGluZQo=", "config": { "unbonding_period": {"time": 60}, "min_stake_amount": "1000"}}'```
 `prng_seed` is a random string base64 encoded used as salt
 `unbonding_period` is in seconds (604800 for 1 week)
 The `admin` field is optional and will default to the "--from" address if you do not specify it.
@@ -80,11 +80,12 @@ To upload a new airdrop (i.e. merkle root hash):
 
 ```secretcli tx compute execute <contract-address> '{"register_merkle_root": {"merkle_root": <hash>, "expiration": <stage_expiration>, "start": <stage_start>, "total_amount": "<total_amount_airdropped>"}}' --from <admin_account> --gas 1000000```
 
-`stage_expiration` and `start`: format is `"expiration": { "at_time": "<nanoseconds from epoch>" }`
+`stage_expiration` and `start`: format is `{"at_time": "<nanoseconds from epoch>"}` or `{"at_height": "<block_height>}`
 
 Example:
 
-`'{"register_merkle_root": {"merkle_root": "915b457b0c8e42e1c857439b818dc1e7ceb664cf54cbd1d7d5fb37c21cf49ece", "expiration": {"at_time": "1664469259"}, "start": {"at_time": "1664369259"} , "total_amount": "46003"}}'`
+`secretcli tx compute execute secret136utj09hh78eqmvkfajw0dewje8jlmuqral0hu '{"register_merkle_root": {"merkle_root": "f04ff6555c32626bfcffb0d1bcc665b72560c0aef076a12a10fc204190c3b64d", "expiration": {"at_time":"1664827597"}, "start": {"at_time":"1664727597"}, "total_amount": "46003"}}' --from d --gas 1000000`
+
 
 Returns the airdrop stage number.
 

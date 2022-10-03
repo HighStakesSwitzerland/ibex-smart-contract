@@ -8,6 +8,7 @@ use hex::FromHexError;
 use secret_toolkit::crypto::sha_256;
 use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 use sha2::Digest;
+use std::str;
 
 use crate::batch;
 use crate::msg::{
@@ -215,21 +216,21 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
         } => execute_airdrop_claim(deps, env, &info, stage, amount, proof),
         ExecuteMsg::ChangeAdmin { address, .. } => change_admin(deps, &info, address),
         ExecuteMsg::SetContractStatus { level, .. } => set_contract_status(deps, &info, level),
+        ExecuteMsg::GetAll { .. } => get_all_ibex_balances(deps, &info),
+        ExecuteMsg::GetAllClaimed { .. } => get_all_ibex_claims(deps, &info),
     };
 
     pad_response(response)
 }
 
 #[entry_point]
-pub fn query(deps: Deps, _env: Env, info: MessageInfo, msg: QueryMsg) -> StdResult<Binary> {
+pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::TokenInfo {} => query_token_info(deps.storage),
         QueryMsg::TokenConfig {} => query_token_config(deps.storage),
         QueryMsg::ContractStatus {} => query_contract_status(deps.storage),
         QueryMsg::LatestStage { .. } => query_latest_sage(deps.storage),
         QueryMsg::MerkleRoot { stage } => query_merkle_root(deps.storage, stage),
-        QueryMsg::GetAll { .. } => get_all_ibex_balances(deps, &info),
-        QueryMsg::GetAllClaimed { .. } => get_all_ibex_claims(deps, &info),
         _ => viewing_keys_queries(deps, msg),
     }
 }
@@ -373,11 +374,10 @@ fn query_airdrop_claimed(deps: Deps, stage: u8, address: &Addr) -> StdResult<Bin
         return Err(StdError::generic_err("No such stage"));
     }
 
-    let is_claimed =
-        ClaimedAirdrops::get(deps.storage, stage, address.to_string()).unwrap_or((false, 0));
+    let amount = ClaimedAirdrops::get(deps.storage, stage, address.to_string()).unwrap_or(0);
     let response = QueryAnswer::AirdropClaimed {
-        claimed: is_claimed.0,
-        amount: is_claimed.1,
+        claimed: amount > 0,
+        amount,
     };
     return to_binary(&response);
 }
@@ -528,14 +528,13 @@ fn try_unstake(
 }
 
 fn try_claim(deps: DepsMut, env: Env, info: &MessageInfo) -> StdResult<Response> {
-    let release = dbg!(CLAIMS.claim_tokens(
+    let release = CLAIMS.claim_tokens(
         deps.storage,
         &info.sender,
         &env.block,
-        Some(Uint128::new(100000))
-    )?);
+        Some(Uint128::new(100000)),
+    )?;
 
-    dbg!(release);
     if release.is_zero() {
         return Err(StdError::generic_err("Nothing to claim"));
     }
@@ -767,9 +766,10 @@ fn execute_airdrop_claim(
     // verify not claimed
     let proof_addr = info.sender.to_string();
     if let Some(claimed) = ClaimedAirdrops::get(deps.storage, stage, proof_addr.clone()) {
-        if claimed.0 {
-            return Err(StdError::generic_err("Already claimed"));
-        }
+        return Err(StdError::generic_err(format!(
+            "Already claimed amount {}",
+            claimed
+        )));
     }
 
     let user_input = format!("{}{}", proof_addr, amount);
@@ -933,26 +933,28 @@ fn perform_transfer(
     Ok(())
 }
 
-fn get_all_ibex_balances(deps: Deps, info: &MessageInfo) -> StdResult<Binary> {
+fn get_all_ibex_balances(deps: DepsMut, info: &MessageInfo) -> StdResult<Response> {
     let constants = Constants::load(deps.storage)?;
     check_if_admin(&constants.admin, &info.sender)?;
 
     let all_balances = BalancesStore::get_all(deps.storage);
 
-    to_binary(&QueryAnswer::GetAll {
+    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::GetAll {
         result: all_balances,
-    })
+    })?))
 }
 
-fn get_all_ibex_claims(deps: Deps, info: &MessageInfo) -> StdResult<Binary> {
+fn get_all_ibex_claims(deps: DepsMut, info: &MessageInfo) -> StdResult<Response> {
     let constants = Constants::load(deps.storage)?;
     check_if_admin(&constants.admin, &info.sender)?;
 
     let all_balances = ClaimedAirdrops::get_all(deps.storage);
 
-    to_binary(&QueryAnswer::GetAllClaimed {
-        result: all_balances,
-    })
+    Ok(
+        Response::new().set_data(to_binary(&ExecuteAnswer::GetAllClaimed {
+            result: all_balances,
+        })?),
+    )
 }
 
 fn check_if_admin(config_admin: &Addr, account: &Addr) -> StdResult<()> {
@@ -1581,7 +1583,7 @@ mod tests {
         let expires = constants.unbonding_period.after(&mock_env().block);
         let info = mock_info("butler", &[]);
 
-        let claim_response = dbg!(CLAIMS.query_claims(deps.as_ref(), &info.sender));
+        let claim_response = CLAIMS.query_claims(deps.as_ref(), &info.sender);
         assert!(
             claim_response.is_ok(),
             "Init failed: {}",
@@ -1677,7 +1679,7 @@ mod tests {
             address: info.clone().sender,
             key: vk.0,
         };
-        let query_response = query(deps.as_ref(), mock_env(), info, query_claim_msg).unwrap();
+        let query_response = query(deps.as_ref(), mock_env(), query_claim_msg).unwrap();
         let claims = match from_binary(&query_response).unwrap() {
             QueryAnswer::Claim { amounts, .. } => amounts,
             _ => panic!("Unexpected result from claim query"),
@@ -1917,7 +1919,7 @@ mod tests {
             key: "no_vk_yet".to_string(),
         };
         let info = mock_info("giannis", &[]);
-        let query_result = query(deps.as_ref(), mock_env(), info.clone(), no_vk_yet_query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), no_vk_yet_query_msg);
         let error = extract_error_msg(query_result);
         assert_eq!(
             error,
@@ -1940,8 +1942,7 @@ mod tests {
             key: vk.0,
         };
 
-        let query_response =
-            query(deps.as_ref(), mock_env(), info.clone(), query_balance_msg).unwrap();
+        let query_response = query(deps.as_ref(), mock_env(), query_balance_msg).unwrap();
         let balance = match from_binary(&query_response).unwrap() {
             QueryAnswer::Balance {
                 amount,
@@ -1955,7 +1956,7 @@ mod tests {
             address: Addr::unchecked("giannis".to_string()),
             key: "wrong_vk".to_string(),
         };
-        let query_result = query(deps.as_ref(), mock_env(), info, wrong_vk_query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), wrong_vk_query_msg);
         let error = extract_error_msg(query_result);
         assert_eq!(
             error,
@@ -1972,7 +1973,7 @@ mod tests {
         }]);
         let query_msg = QueryMsg::TokenInfo {};
         let info = mock_info("giannis", &[]);
-        let query_result = query(deps.as_ref(), mock_env(), info, query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), query_msg);
         assert!(
             query_result.is_ok(),
             "Init failed: {}",
@@ -1999,8 +2000,7 @@ mod tests {
     fn test_query_token_config() {
         let (_init_result, deps) = init_helper(vec![]);
         let query_msg = QueryMsg::TokenConfig {};
-        let info = mock_info("giannis", &[]);
-        let query_result = query(deps.as_ref(), mock_env(), info, query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), query_msg);
         assert!(
             query_result.is_ok(),
             "Init failed: {}",
@@ -2051,7 +2051,7 @@ mod tests {
             address: Addr::unchecked("michael".to_string()),
             key: "wrong_key".to_string(),
         };
-        let query_result = query(deps.as_ref(), mock_env(), info.clone(), query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), query_msg);
         let error = extract_error_msg(query_result);
         assert!(error.contains("Wrong viewing key"));
 
@@ -2059,7 +2059,7 @@ mod tests {
             address: Addr::unchecked("michael".to_string()),
             key: "key".to_string(),
         };
-        let query_result = query(deps.as_ref(), mock_env(), info, query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), query_msg);
         let balance = match from_binary(&query_result.unwrap()).unwrap() {
             QueryAnswer::Balance {
                 amount,
@@ -2136,7 +2136,7 @@ mod tests {
             page: None,
             page_size: 0,
         };
-        let query_result = query(deps.as_ref(), mock_env(), info.clone(), query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
             QueryAnswer::TransferHistory { txs, .. } => txs,
             _ => panic!("Unexpected"),
@@ -2149,7 +2149,7 @@ mod tests {
             page: None,
             page_size: 10,
         };
-        let query_result = query(deps.as_ref(), mock_env(), info.clone(), query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
             QueryAnswer::TransferHistory { txs, .. } => txs,
             _ => panic!("Unexpected"),
@@ -2162,7 +2162,7 @@ mod tests {
             page: None,
             page_size: 2,
         };
-        let query_result = query(deps.as_ref(), mock_env(), info.clone(), query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
             QueryAnswer::TransferHistory { txs, .. } => txs,
             _ => panic!("Unexpected"),
@@ -2175,7 +2175,7 @@ mod tests {
             page: Some(1),
             page_size: 2,
         };
-        let query_result = query(deps.as_ref(), mock_env(), info.clone(), query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
             QueryAnswer::TransferHistory { txs, .. } => txs,
             _ => panic!("Unexpected"),
@@ -2282,7 +2282,7 @@ mod tests {
             page: None,
             page_size: 10,
         };
-        let query_result = query(deps.as_ref(), mock_env(), info.clone(), query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
             QueryAnswer::TransferHistory { txs, .. } => txs,
             _ => panic!("Unexpected"),
@@ -2295,7 +2295,7 @@ mod tests {
             page: None,
             page_size: 10,
         };
-        let query_result = query(deps.as_ref(), mock_env(), info, query_msg);
+        let query_result = query(deps.as_ref(), mock_env(), query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
             QueryAnswer::TransactionHistory { txs, .. } => txs,
             other => panic!("Unexpected: {:?}", other),
@@ -2425,12 +2425,7 @@ mod tests {
             .unwrap(),
         );
 
-        let query_result = query(
-            deps.as_ref(),
-            env.clone(),
-            info.clone(),
-            QueryMsg::LatestStage {},
-        );
+        let query_result = query(deps.as_ref(), env.clone(), QueryMsg::LatestStage {});
         let query_answer: QueryAnswer = from_binary(&query_result.unwrap()).unwrap();
 
         assert_eq!(
@@ -2438,12 +2433,7 @@ mod tests {
             to_binary(&QueryAnswer::AirdropStage { stage: 1 }).unwrap(),
         );
 
-        let query_result = query(
-            deps.as_ref(),
-            env,
-            info.clone(),
-            QueryMsg::MerkleRoot { stage: 1 },
-        );
+        let query_result = query(deps.as_ref(), env, QueryMsg::MerkleRoot { stage: 1 });
         let query_answer: QueryAnswer = from_binary(&query_result.unwrap()).unwrap();
 
         match query_answer {
@@ -2530,10 +2520,9 @@ mod tests {
         assert_eq!(total_claimed, test_data.amount.u128());
 
         // Check address is claimed
-        let claim_airdrops =
+        let claimed_amount =
             ClaimedAirdrops::get(deps.as_mut().storage, 1, test_data.account.to_string()).unwrap();
-        assert_eq!(true, claim_airdrops.0);
-        assert_eq!(test_data.amount.u128(), claim_airdrops.1);
+        assert_eq!(test_data.amount.u128(), claimed_amount);
 
         // contract address has less
         let contract_balance =
@@ -2548,7 +2537,7 @@ mod tests {
         // check error on double claim
         let res = execute(deps.as_mut(), env.clone(), info.clone(), msg);
         let error = extract_error_msg(res);
-        assert_eq!(error, "Already claimed");
+        assert_eq!(error, "Already claimed amount 100");
 
         // Second test
         let test_data_2 = "{
@@ -2642,22 +2631,11 @@ mod tests {
         let total_claimed = AirdropStagesTotalAmountCaimed::load(deps.as_ref().storage, 1);
         assert_eq!(total_claimed, 21_663);
 
-        // Check history
-        dbg!(ClaimedAirdrops::get_all(&mut deps.storage));
-        dbg!(ClaimedAirdrops::get_all(&mut deps.storage));
-        dbg!(ClaimedAirdrops::get_all(&mut deps.storage));
-        dbg!(ClaimedAirdrops::get_all(&mut deps.storage));
-        dbg!(ClaimedAirdrops::get_all(&mut deps.storage));
-        dbg!(ClaimedAirdrops::get_all(&mut deps.storage));
-
-        let claimed_airdrops = ClaimedAirdrops::get_all(&mut deps.storage);
-        assert_eq!(4, claimed_airdrops.len());
-
         // Check history from command
-        let claimed_msg = QueryMsg::GetAllClaimed {};
+        let claimed_msg = ExecuteMsg::GetAllClaimed {};
         // when not admin
         let info = mock_info("roberto", &[]);
-        let query_result = query(deps.as_ref(), mock_env(), info, claimed_msg.clone());
+        let query_result = execute(deps.as_mut(), mock_env(), info.clone(), claimed_msg.clone());
         let error = extract_error_msg(query_result);
         assert!(error.contains(
             "This is an admin command. Admin commands can only be run from admin address"
@@ -2666,9 +2644,9 @@ mod tests {
         // when admin
         let info = mock_info("admin", &[]);
         let query_response =
-            query(deps.as_ref(), mock_env(), info.clone(), claimed_msg.clone()).unwrap();
-        let claimed_balances = match from_binary(&query_response).unwrap() {
-            QueryAnswer::GetAllClaimed { result } => result,
+            execute(deps.as_mut(), mock_env(), info.clone(), claimed_msg.clone()).unwrap();
+        let claimed_balances = match from_binary(&query_response.data.unwrap()).unwrap() {
+            ExecuteAnswer::GetAllClaimed { result } => result,
             _ => panic!("Unexpected result from claim query"),
         };
 
@@ -2866,13 +2844,7 @@ mod tests {
             address: info.clone().sender,
             stage: 1,
         };
-        let query_response = query(
-            deps.as_ref(),
-            mock_env(),
-            info.clone(),
-            query_is_claim_msg.clone(),
-        )
-        .unwrap();
+        let query_response = query(deps.as_ref(), mock_env(), query_is_claim_msg.clone()).unwrap();
         let (claimed, amount) = match from_binary(&query_response).unwrap() {
             QueryAnswer::AirdropClaimed { claimed, amount } => (claimed, amount),
             _ => panic!("Unexpected result from claim query"),
@@ -2904,7 +2876,7 @@ mod tests {
         );
 
         // recheck is_claimed
-        let query_response = query(deps.as_ref(), env, info.clone(), query_is_claim_msg).unwrap();
+        let query_response = query(deps.as_ref(), env, query_is_claim_msg).unwrap();
         let (claimed, amount) = match from_binary(&query_response).unwrap() {
             QueryAnswer::AirdropClaimed { claimed, amount } => (claimed, amount),
             _ => panic!("Unexpected result from claim query"),
@@ -2968,63 +2940,5 @@ mod tests {
         assert_eq!(expiration, exp);
         assert_eq!(start, st);
         assert_eq!(test_data.root, root);
-    }
-
-    #[test]
-    fn test_get_all_ibex_balances() {
-        let init_balances = vec![
-            WalletBalances {
-                address: "michael".to_string(),
-                unstaked: 5000u128,
-                staked: 15000u128,
-            },
-            WalletBalances {
-                address: "josé".to_string(),
-                unstaked: 2345u128,
-                staked: 5432u128,
-            },
-            WalletBalances {
-                address: "jean-pierre".to_string(),
-                unstaked: 1111u128,
-                staked: 1111u128,
-            },
-            WalletBalances {
-                address: "raoul".to_string(),
-                unstaked: 3333u128,
-                staked: 4444u128,
-            },
-            WalletBalances {
-                address: "antonio".to_string(),
-                unstaked: 5555u128,
-                staked: 6666u128,
-            },
-        ];
-        let (init_result, deps) = init_helper(init_balances.clone());
-        assert!(
-            init_result.is_ok(),
-            "Init failed: {}",
-            init_result.err().unwrap()
-        );
-
-        let query_msg = QueryMsg::GetAll {};
-
-        // when not admin
-        let info = mock_info("michael", &[]);
-        let query_result = query(deps.as_ref(), mock_env(), info, query_msg.clone());
-        let error = extract_error_msg(query_result);
-        assert!(error.contains(
-            "This is an admin command. Admin commands can only be run from admin address"
-        ));
-
-        // when admin
-        let info = mock_info("admin", &[]);
-        let query_response = query(deps.as_ref(), mock_env(), info, query_msg).unwrap();
-
-        let balances = match from_binary(&query_response).unwrap() {
-            QueryAnswer::GetAll { result } => result,
-            _ => panic!("Unexpected result from claim query"),
-        };
-
-        assert_eq!(init_balances, balances);
     }
 }

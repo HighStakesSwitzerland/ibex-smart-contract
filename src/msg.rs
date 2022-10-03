@@ -127,6 +127,8 @@ pub enum ExecuteMsg {
         stage: u8,
         address: String,
     },
+    GetAll {},
+    GetAllClaimed {},
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug)]
@@ -183,6 +185,12 @@ pub enum ExecuteAnswer {
         status: ResponseStatus,
         amount: u128,
     },
+    GetAll {
+        result: Vec<WalletBalances>,
+    },
+    GetAllClaimed {
+        result: Vec<WalletClaimBalances>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
@@ -219,9 +227,7 @@ pub enum QueryMsg {
         stage: u8,
         address: Addr,
         key: String,
-    },
-    GetAll {},
-    GetAllClaimed {},
+    }
 }
 
 impl QueryMsg {
@@ -291,13 +297,7 @@ pub enum QueryAnswer {
         expiration: Expiration,
         start: Expiration,
         total_amount: Uint128,
-    },
-    GetAll {
-        result: Vec<WalletBalances>,
-    },
-    GetAllClaimed {
-        result: Vec<WalletClaimBalances>,
-    },
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
@@ -358,7 +358,6 @@ pub struct WalletBalances {
 pub struct WalletClaimBalances {
     pub(crate) address: String,
     pub(crate) stage: u8,
-    pub(crate) claimed: bool,
     pub(crate) amount: u128,
 }
 

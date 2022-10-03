@@ -724,6 +724,7 @@ fn execute_register_merkle_root(
             expiration,
             start,
             merkle_root,
+            wallet_holding_ibex: constants.ibex_wallet.to_string()
         })?),
     )
 }
@@ -1972,7 +1973,6 @@ mod tests {
             staked: 15000u128,
         }]);
         let query_msg = QueryMsg::TokenInfo {};
-        let info = mock_info("giannis", &[]);
         let query_result = query(deps.as_ref(), mock_env(), query_msg);
         assert!(
             query_result.is_ok(),
@@ -2419,8 +2419,8 @@ mod tests {
                 stage: 1,
                 expiration,
                 start,
-                merkle_root: "634de21cde1044f41d90373733b0f0fb1c1c71f9652b905cdf159e73c4cf0d37"
-                    .to_string(),
+                merkle_root: "634de21cde1044f41d90373733b0f0fb1c1c71f9652b905cdf159e73c4cf0d37".to_string(),
+                wallet_holding_ibex: "admin".to_string()
             })
             .unwrap(),
         );
@@ -2910,6 +2910,7 @@ mod tests {
                 expiration,
                 start,
                 merkle_root: test_data.root.clone(),
+                wallet_holding_ibex: "admin".to_string()
             })
             .unwrap(),
         );
@@ -2926,13 +2927,14 @@ mod tests {
             stage: 1u8,
         };
         let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
-        let (stage, exp, st, root) = match from_binary(&res.data.unwrap()).unwrap() {
+        let (stage, exp, st, root, wallet) = match from_binary(&res.data.unwrap()).unwrap() {
             ExecuteAnswer::RegisterMerkleRoot {
                 stage,
                 expiration,
                 start,
                 merkle_root,
-            } => (stage, expiration, start, merkle_root),
+                wallet_holding_ibex
+            } => (stage, expiration, start, merkle_root, wallet_holding_ibex),
             _ => panic!("Unexpected result from handle"),
         };
 
@@ -2940,5 +2942,66 @@ mod tests {
         assert_eq!(expiration, exp);
         assert_eq!(start, st);
         assert_eq!(test_data.root, root);
+        assert_eq!("admin", wallet);
+
+    }
+
+    #[test]
+    fn test_get_all_ibex_balances() {
+        let init_balances = vec![
+            WalletBalances {
+                address: "michael".to_string(),
+                unstaked: 5000u128,
+                staked: 15000u128,
+            },
+            WalletBalances {
+                address: "josé".to_string(),
+                unstaked: 2345u128,
+                staked: 5432u128,
+            },
+            WalletBalances {
+                address: "jean-pierre".to_string(),
+                unstaked: 1111u128,
+                staked: 1111u128,
+            },
+            WalletBalances {
+                address: "raoul".to_string(),
+                unstaked: 3333u128,
+                staked: 4444u128,
+            },
+            WalletBalances {
+                address: "antonio".to_string(),
+                unstaked: 5555u128,
+                staked: 6666u128,
+            },
+        ];
+        let (init_result, mut deps) = init_helper(init_balances.clone());
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
+
+        let execute_msg = ExecuteMsg::GetAll {};
+
+        // when not admin
+        let info = mock_info("michael", &[]);
+        let query_result = execute(deps.as_mut(), mock_env(), info, execute_msg.clone());
+        let error = extract_error_msg(query_result);
+        assert!(error.contains(
+            "This is an admin command. Admin commands can only be run from admin address"
+        ));
+
+        // when admin
+        let info = mock_info("admin", &[]);
+        let res = execute(deps.as_mut(), mock_env(), info, execute_msg).unwrap();
+        let result = match from_binary(&res.data.unwrap()).unwrap() {
+            ExecuteAnswer::GetAll {
+                result
+            } => (result),
+            _ => panic!("Unexpected result from handle"),
+        };
+
+        assert_eq!(init_balances, result);
     }
 }

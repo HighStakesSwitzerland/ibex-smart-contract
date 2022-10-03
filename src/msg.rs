@@ -180,6 +180,7 @@ pub enum ExecuteAnswer {
         start: Expiration,
         expiration: Expiration,
         merkle_root: String,
+        wallet_holding_ibex: String,
     },
     WithdrawUnclaimed {
         status: ResponseStatus,

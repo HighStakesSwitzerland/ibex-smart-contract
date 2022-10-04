@@ -129,6 +129,10 @@ pub enum ExecuteMsg {
     },
     GetAll {},
     GetAllClaimed {},
+    UpdateExpDate {
+        stage: u8,
+        new_expiration: Expiration,
+    },
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug)]
@@ -192,6 +196,9 @@ pub enum ExecuteAnswer {
     GetAllClaimed {
         result: Vec<WalletClaimBalances>,
     },
+    UpdateExpDate {
+        status: ResponseStatus,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
@@ -228,7 +235,7 @@ pub enum QueryMsg {
         stage: u8,
         address: Addr,
         key: String,
-    }
+    },
 }
 
 impl QueryMsg {
@@ -287,6 +294,8 @@ pub enum QueryAnswer {
     AirdropClaimed {
         claimed: bool,
         amount: u128,
+        expiration: Expiration,
+        start: Expiration,
     },
     AirdropStage {
         stage: u8,
@@ -298,7 +307,7 @@ pub enum QueryAnswer {
         expiration: Expiration,
         start: Expiration,
         total_amount: Uint128,
-    }
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
@@ -341,11 +350,6 @@ pub struct MerkleRootResponse {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct LatestStageResponse {
     pub latest_stage: u8,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct IsClaimedResponse {
-    pub is_claimed: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

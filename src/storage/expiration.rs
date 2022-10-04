@@ -23,7 +23,7 @@ impl fmt::Display for Expiration {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Expiration::AtHeight(height) => write!(f, "expiration height: {}", height),
-            Expiration::AtTime(time) => write!(f, "expiration time: {}", time.nanos()),
+            Expiration::AtTime(time) => write!(f, "expiration time: {}", time.seconds()),
             Expiration::Never {} => write!(f, "expiration: never"),
         }
     }
@@ -34,7 +34,7 @@ impl FromStr for Expiration {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.contains("expiration time") {
-            return Ok(Expiration::AtTime(Timestamp::from_nanos(
+            return Ok(Expiration::AtTime(Timestamp::from_seconds(
                 s.strip_prefix("expiration time: ")
                     .unwrap()
                     .parse()
@@ -119,14 +119,6 @@ impl Duration {
         match self {
             Duration::Height(h) => Expiration::AtHeight(block.height + h),
             Duration::Time(t) => Expiration::AtTime(block.time.plus_seconds(*t)),
-        }
-    }
-
-    // creates a number just a little bigger, so we can use it to pass expiration point
-    pub fn plus_one(&self) -> Duration {
-        match self {
-            Duration::Height(h) => Duration::Height(h + 1),
-            Duration::Time(t) => Duration::Time(t + 1),
         }
     }
 }

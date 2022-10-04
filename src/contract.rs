@@ -1,3 +1,5 @@
+use std::str;
+
 /// This contract implements SNIP-20 standard:
 /// https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md
 use cosmwasm_std::{
@@ -8,7 +10,6 @@ use hex::FromHexError;
 use secret_toolkit::crypto::sha_256;
 use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 use sha2::Digest;
-use std::str;
 
 use crate::batch;
 use crate::msg::{
@@ -17,7 +18,7 @@ use crate::msg::{
 };
 use crate::state::{
     AirdropStages, AirdropStagesExpiration, AirdropStagesStart, AirdropStagesTotalAmount,
-    AirdropStagesTotalAmountCaimed, BalancesStore, ClaimedAirdrops, Constants, ContractStatusStore,
+    AirdropStagesTotalAmountCaimed, AirdropsClaimed, BalancesStore, Constants, ContractStatusStore,
     MerkleRoots, StakedBalancesStore, TotalSupplyStore, CLAIMS,
 };
 use crate::storage::expiration::Expiration;
@@ -130,7 +131,18 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
     let contract_status = ContractStatusStore::load(deps.storage)?;
 
     match contract_status {
-        ContractStatusLevel::StopAll | ContractStatusLevel::StopAllButUnstake => {
+        ContractStatusLevel::StopAll => {
+            let response = match msg {
+                ExecuteMsg::SetContractStatus { level, .. } => {
+                    set_contract_status(deps, &info, level)
+                }
+                _ => Err(StdError::generic_err(
+                    "This contract is stopped and this action is not allowed",
+                )),
+            };
+            return pad_response(response);
+        }
+        ContractStatusLevel::StopAllButUnstake => {
             let response = match msg {
                 ExecuteMsg::SetContractStatus { level, .. } => {
                     set_contract_status(deps, &info, level)
@@ -213,11 +225,15 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             stage,
             amount,
             proof,
-        } => execute_airdrop_claim(deps, env, &info, stage, amount, proof),
+        } => execute_claim_airdrop(deps, env, &info, stage, amount, proof),
         ExecuteMsg::ChangeAdmin { address, .. } => change_admin(deps, &info, address),
         ExecuteMsg::SetContractStatus { level, .. } => set_contract_status(deps, &info, level),
         ExecuteMsg::GetAll { .. } => get_all_ibex_balances(deps, &info),
         ExecuteMsg::GetAllClaimed { .. } => get_all_ibex_claims(deps, &info),
+        ExecuteMsg::UpdateExpDate {
+            stage,
+            new_expiration,
+        } => execute_update_stage_exp(deps, &info, stage, new_expiration),
     };
 
     pad_response(response)
@@ -374,10 +390,14 @@ fn query_airdrop_claimed(deps: Deps, stage: u8, address: &Addr) -> StdResult<Bin
         return Err(StdError::generic_err("No such stage"));
     }
 
-    let amount = ClaimedAirdrops::get(deps.storage, stage, address.to_string()).unwrap_or(0);
+    let start = AirdropStagesStart::get(deps.storage, stage).unwrap();
+    let expiration = AirdropStagesExpiration::get(deps.storage, stage);
+    let amount = AirdropsClaimed::get(deps.storage, stage, address.to_string()).unwrap_or(0);
     let response = QueryAnswer::AirdropClaimed {
         claimed: amount > 0,
         amount,
+        expiration,
+        start,
     };
     return to_binary(&response);
 }
@@ -724,12 +744,12 @@ fn execute_register_merkle_root(
             expiration,
             start,
             merkle_root,
-            wallet_holding_ibex: constants.ibex_wallet.to_string()
+            wallet_holding_ibex: constants.ibex_wallet.to_string(),
         })?),
     )
 }
 
-fn execute_airdrop_claim(
+fn execute_claim_airdrop(
     mut deps: DepsMut,
     env: Env,
     info: &MessageInfo,
@@ -748,7 +768,7 @@ fn execute_airdrop_claim(
         return Err(StdError::generic_err(
             "airdrop stage is not live yet: Start ".to_string()
                 + start.unwrap().as_seconds().to_string().as_str()
-                + " vs Current block time "
+                + " seconds vs Current block time "
                 + &env.block.time.seconds().to_string(),
         ));
     }
@@ -759,14 +779,14 @@ fn execute_airdrop_claim(
         return Err(StdError::generic_err(
             "airdrop stage has expired. Expiration ".to_string()
                 + expiration.as_seconds().to_string().as_str()
-                + " vs Current block "
+                + " seconds vs Current block "
                 + &env.block.time.seconds().to_string(),
         ));
     }
 
     // verify not claimed
     let proof_addr = info.sender.to_string();
-    if let Some(claimed) = ClaimedAirdrops::get(deps.storage, stage, proof_addr.clone()) {
+    if let Some(claimed) = AirdropsClaimed::get(deps.storage, stage, proof_addr.clone()) {
         return Err(StdError::generic_err(format!(
             "Already claimed amount {}",
             claimed
@@ -805,7 +825,7 @@ fn execute_airdrop_claim(
     }
 
     // Update claim index to the current stage
-    ClaimedAirdrops::set_claimed(deps.storage, stage, proof_addr.clone(), amount.u128())?;
+    AirdropsClaimed::set_claimed(deps.storage, stage, proof_addr.clone(), amount.u128()).unwrap();
 
     // Update total claimed to reflect
     let mut total_claimed_amount = AirdropStagesTotalAmountCaimed::load(deps.storage, stage);
@@ -905,6 +925,23 @@ fn execute_withdraw_airdrop_unclaimed(
     )
 }
 
+fn execute_update_stage_exp(
+    deps: DepsMut,
+    info: &MessageInfo,
+    stage: u8,
+    new_expiration: Expiration,
+) -> StdResult<Response> {
+    let constants = Constants::load(deps.storage)?;
+    check_if_admin(&constants.admin, &info.sender)?;
+
+    AirdropStagesExpiration::save(deps.storage, stage, new_expiration)?;
+    Ok(
+        Response::new().set_data(to_binary(&ExecuteAnswer::UpdateExpDate {
+            status: Success,
+        })?),
+    )
+}
+
 fn perform_transfer(
     store: &mut dyn Storage,
     from: &Addr,
@@ -949,7 +986,7 @@ fn get_all_ibex_claims(deps: DepsMut, info: &MessageInfo) -> StdResult<Response>
     let constants = Constants::load(deps.storage)?;
     check_if_admin(&constants.admin, &info.sender)?;
 
-    let all_balances = ClaimedAirdrops::get_all(deps.storage);
+    let all_balances = AirdropsClaimed::get_all(deps.storage);
 
     Ok(
         Response::new().set_data(to_binary(&ExecuteAnswer::GetAllClaimed {
@@ -2419,7 +2456,8 @@ mod tests {
                 stage: 1,
                 expiration,
                 start,
-                merkle_root: "634de21cde1044f41d90373733b0f0fb1c1c71f9652b905cdf159e73c4cf0d37".to_string(),
+                merkle_root: "634de21cde1044f41d90373733b0f0fb1c1c71f9652b905cdf159e73c4cf0d37"
+                    .to_string(),
                 wallet_holding_ibex: "admin".to_string()
             })
             .unwrap(),
@@ -2521,7 +2559,7 @@ mod tests {
 
         // Check address is claimed
         let claimed_amount =
-            ClaimedAirdrops::get(deps.as_mut().storage, 1, test_data.account.to_string()).unwrap();
+            AirdropsClaimed::get(deps.as_mut().storage, 1, test_data.account.to_string()).unwrap();
         assert_eq!(test_data.amount.u128(), claimed_amount);
 
         // contract address has less
@@ -2649,7 +2687,6 @@ mod tests {
             ExecuteAnswer::GetAllClaimed { result } => result,
             _ => panic!("Unexpected result from claim query"),
         };
-
         assert_eq!(4, claimed_balances.len());
     }
 
@@ -2811,11 +2848,43 @@ mod tests {
         let test_data: Encoded = from_slice(test_data.as_slice()).unwrap();
         let env = mock_env();
         let info = mock_info("admin", &[]);
+        let expiration = Duration::Time(1000).after(&env.block);
+        let start = Duration::Time(100).after(&env.block);
+
+        let merkle: StdResult<ExecuteMsg> = from_binary(&Binary::from(
+            r#"{"register_merkle_root": {"merkle_root": "d1979d149b036f112d41c818f1d74dc52905b22bcb6e18466fb61154ee6b6001", "expiration": {"at_time":"1665927597000000000"}, "start": {"at_time":"1664727597000000000"}, "total_amount": "21220"}}"#.as_bytes(),
+        ));
+
+        match merkle.unwrap() {
+            ExecuteMsg::RegisterMerkleRoot {
+                merkle_root,
+                expiration,
+                start,
+                total_amount,
+            } => {
+                assert_eq!(
+                    "d1979d149b036f112d41c818f1d74dc52905b22bcb6e18466fb61154ee6b6001",
+                    merkle_root
+                );
+                assert_eq!(
+                    Expiration::AtTime(Timestamp::from_seconds(1665927597)).as_seconds(),
+                    expiration.as_seconds()
+                );
+                assert_eq!(
+                    Expiration::AtTime(Timestamp::from_seconds(1664727597)).as_seconds(),
+                    start.as_seconds()
+                );
+                assert_eq!(21220u128, total_amount.u128());
+            }
+            _ => {
+                panic!("Can deserialize")
+            }
+        }
 
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
-            expiration: Duration::Time(1000).after(&env.block),
-            start: Duration::Time(100).after(&env.block),
+            expiration,
+            start,
             total_amount: Uint128::new(15000),
         };
         let _res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
@@ -2845,12 +2914,19 @@ mod tests {
             stage: 1,
         };
         let query_response = query(deps.as_ref(), mock_env(), query_is_claim_msg.clone()).unwrap();
-        let (claimed, amount) = match from_binary(&query_response).unwrap() {
-            QueryAnswer::AirdropClaimed { claimed, amount } => (claimed, amount),
+        let (claimed, amount, exp, start_exp) = match from_binary(&query_response).unwrap() {
+            QueryAnswer::AirdropClaimed {
+                claimed,
+                amount,
+                expiration,
+                start,
+            } => (claimed, amount, expiration, start),
             _ => panic!("Unexpected result from claim query"),
         };
         assert_eq!(false, claimed);
         assert_eq!(0, amount);
+        assert_eq!(expiration.as_seconds(), exp.as_seconds());
+        assert_eq!(start.as_seconds(), start_exp.as_seconds());
 
         // claim it
         // wait for airdrop start height
@@ -2877,12 +2953,19 @@ mod tests {
 
         // recheck is_claimed
         let query_response = query(deps.as_ref(), env, query_is_claim_msg).unwrap();
-        let (claimed, amount) = match from_binary(&query_response).unwrap() {
-            QueryAnswer::AirdropClaimed { claimed, amount } => (claimed, amount),
+        let (claimed, amount, exp, start_exp) = match from_binary(&query_response).unwrap() {
+            QueryAnswer::AirdropClaimed {
+                claimed,
+                amount,
+                expiration,
+                start,
+            } => (claimed, amount, expiration, start),
             _ => panic!("Unexpected result from claim query"),
         };
         assert_eq!(true, claimed);
         assert_eq!(test_data.amount.u128(), amount);
+        assert_eq!(expiration.as_seconds(), exp.as_seconds());
+        assert_eq!(start.as_seconds(), start_exp.as_seconds());
     }
 
     #[test]
@@ -2933,7 +3016,7 @@ mod tests {
                 expiration,
                 start,
                 merkle_root,
-                wallet_holding_ibex
+                wallet_holding_ibex,
             } => (stage, expiration, start, merkle_root, wallet_holding_ibex),
             _ => panic!("Unexpected result from handle"),
         };
@@ -2943,7 +3026,6 @@ mod tests {
         assert_eq!(start, st);
         assert_eq!(test_data.root, root);
         assert_eq!("admin", wallet);
-
     }
 
     #[test]
@@ -2996,9 +3078,7 @@ mod tests {
         let info = mock_info("admin", &[]);
         let res = execute(deps.as_mut(), mock_env(), info, execute_msg).unwrap();
         let result = match from_binary(&res.data.unwrap()).unwrap() {
-            ExecuteAnswer::GetAll {
-                result
-            } => (result),
+            ExecuteAnswer::GetAll { result } => (result),
             _ => panic!("Unexpected result from handle"),
         };
 

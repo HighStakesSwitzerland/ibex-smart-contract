@@ -1,5 +1,3 @@
-#![allow(clippy::field_reassign_with_default)] // This is triggered in `#[derive(JsonSchema)]`
-
 use cosmwasm_std::{Addr, Binary, StdError, StdResult, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -13,40 +11,11 @@ use crate::viewing_key_obj::ViewingKeyObj;
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct InstantiateMsg {
     pub name: String,
-    pub admin: Option<Addr>,
+    pub readonly_admin: Addr,
     pub symbol: String,
-    pub decimals: u8,
-    pub initial_balances: Option<Vec<WalletBalances>>,
+    pub initial_balances: Vec<WalletBalances>,
+    pub ibex_source_wallet: Addr,
     pub prng_seed: Binary,
-    pub config: Option<InitConfig>,
-}
-
-impl InstantiateMsg {
-    pub fn config(&self) -> InitConfig {
-        self.config.clone().unwrap_or_default()
-    }
-}
-
-/// This type represents optional configuration values which can be overridden.
-/// All values are optional and have defaults which are more private by default,
-/// but can be overridden if necessary
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Default, Debug)]
-#[serde(rename_all = "snake_case")]
-pub struct InitConfig {
-    min_stake_amount: Option<u128>,
-    /// Unbonding period. Pass json "height: 1234" or "time: 60" instead of 'unbonding_period: xxx' key
-    unbonding_period: Option<Duration>,
-}
-
-impl InitConfig {
-    pub fn min_staked_amount(&self) -> Uint128 {
-        Uint128::new(self.min_stake_amount.unwrap_or(100))
-    }
-
-    pub fn unbonding_period(&self) -> Duration {
-        // 7 days unstaking period
-        self.unbonding_period.unwrap_or(Duration::Time(60))
-    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -184,7 +153,7 @@ pub enum ExecuteAnswer {
         start: Expiration,
         expiration: Expiration,
         merkle_root: String,
-        wallet_holding_ibex: String,
+        ibex_source_wallet: String,
     },
     WithdrawUnclaimed {
         status: ResponseStatus,
@@ -267,7 +236,7 @@ pub enum QueryAnswer {
         total_supply: Uint128,
     },
     TokenConfig {
-        min_stake_amount: Uint128,
+        decimals: u8,
         unbonding_period: Duration,
     },
     ContractStatus {

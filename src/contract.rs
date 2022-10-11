@@ -21,7 +21,7 @@ use crate::state::{
     AirdropStagesTotalAmountCaimed, AirdropsClaimed, BalancesStore, Constants, ContractStatusStore,
     MerkleRoots, StakedBalancesStore, TotalSupplyStore, CLAIMS,
 };
-use crate::storage::expiration::Expiration;
+use crate::storage::expiration::{Expiration, WEEK};
 use crate::transaction_history::{
     store_stake_in_history, store_transfer_in_history, store_unstake_in_history,
     StoredLegacyTransfer, StoredRichTx,
@@ -49,17 +49,11 @@ pub fn instantiate(
             "Ticker symbol is not in expected format [A-Z]{3,6}",
         ));
     }
-    if msg.decimals > 18 {
-        return Err(StdError::generic_err("Decimals must not exceed 18"));
-    }
 
-    let init_config = msg.config();
-    let admin = msg.admin.unwrap_or(info.sender);
-
+    let admin = info.sender;
     let mut total_supply: u128 = 0;
     {
-        let initial_balances = msg.initial_balances.unwrap_or_default();
-        for balance in initial_balances {
+        for balance in msg.initial_balances {
             let amount = balance.unstaked;
             BalancesStore::save(
                 deps.storage,
@@ -99,12 +93,12 @@ pub fn instantiate(
         &Constants {
             name: msg.name,
             symbol: msg.symbol,
-            decimals: msg.decimals,
             admin: admin.clone(),
-            min_stake_amount: init_config.min_staked_amount(),
-            unbonding_period: init_config.unbonding_period(),
+            readonly_admin: msg.readonly_admin,
+            // Unbonding period hardcoded
+            unbonding_period: WEEK,
             contract_address: env.contract.address,
-            ibex_wallet: admin,
+            ibex_source_wallet: msg.ibex_source_wallet,
         },
     )?;
 
@@ -294,7 +288,7 @@ fn query_token_info(storage: &dyn Storage) -> StdResult<Binary> {
     to_binary(&QueryAnswer::TokenInfo {
         name: constants.name,
         symbol: constants.symbol,
-        decimals: constants.decimals,
+        decimals: 0u8,
         total_supply,
     })
 }
@@ -303,7 +297,7 @@ fn query_token_config(storage: &dyn Storage) -> StdResult<Binary> {
     let constants = Constants::load(storage)?;
 
     to_binary(&QueryAnswer::TokenConfig {
-        min_stake_amount: constants.min_stake_amount,
+        decimals: 0u8,
         unbonding_period: constants.unbonding_period,
     })
 }
@@ -713,9 +707,8 @@ fn execute_register_merkle_root(
     total_amount: Uint128,
     stage: Option<u8>,
 ) -> StdResult<Response> {
-    let mut constants = Constants::load(deps.storage)?;
+    let constants = Constants::load(deps.storage)?;
     check_if_admin(&constants.admin, &info.sender)?;
-    constants.ibex_wallet = info.sender.clone();
 
     // check merkle root length
     let mut root_buf: [u8; 32] = [0; 32];
@@ -744,7 +737,7 @@ fn execute_register_merkle_root(
             expiration,
             start,
             merkle_root,
-            wallet_holding_ibex: constants.ibex_wallet.to_string(),
+            ibex_source_wallet: constants.ibex_source_wallet.to_string(),
         })?),
     )
 }
@@ -837,7 +830,7 @@ fn execute_claim_airdrop(
     try_transfer_from_impl(
         &mut deps,
         &env,
-        &constants.ibex_wallet,
+        &constants.ibex_source_wallet,
         &constants.contract_address,
         &Addr::unchecked(proof_addr),
         amount,
@@ -858,7 +851,7 @@ fn execute_register_ibex_wallet(
     let mut constants = Constants::load(deps.storage)?;
     check_if_admin(&constants.admin, &info.sender)?;
 
-    constants.ibex_wallet = address;
+    constants.ibex_source_wallet = address;
     Constants::save(deps.storage, &constants)?;
 
     Ok(
@@ -910,7 +903,7 @@ fn execute_withdraw_airdrop_unclaimed(
     try_transfer_from_impl(
         &mut deps,
         &env,
-        &constants.ibex_wallet,
+        &constants.ibex_source_wallet,
         &constants.contract_address,
         &recipient,
         Uint128::new(balance_to_withdraw),
@@ -973,7 +966,7 @@ fn perform_transfer(
 
 fn get_all_ibex_balances(deps: DepsMut, info: &MessageInfo) -> StdResult<Response> {
     let constants = Constants::load(deps.storage)?;
-    check_if_admin(&constants.admin, &info.sender)?;
+    check_if_readonly_admin(&constants.readonly_admin, &info.sender)?;
 
     let all_balances = BalancesStore::get_all(deps.storage);
 
@@ -984,7 +977,7 @@ fn get_all_ibex_balances(deps: DepsMut, info: &MessageInfo) -> StdResult<Respons
 
 fn get_all_ibex_claims(deps: DepsMut, info: &MessageInfo) -> StdResult<Response> {
     let constants = Constants::load(deps.storage)?;
-    check_if_admin(&constants.admin, &info.sender)?;
+    check_if_readonly_admin(&constants.readonly_admin, &info.sender)?;
 
     let all_balances = AirdropsClaimed::get_all(deps.storage);
 
@@ -999,6 +992,18 @@ fn check_if_admin(config_admin: &Addr, account: &Addr) -> StdResult<()> {
     if config_admin != account {
         return Err(StdError::generic_err(
             "This is an admin command. Admin commands can only be run from admin address",
+        ));
+    }
+
+    Ok(())
+}
+
+fn check_if_readonly_admin(config_admin: &Addr, account: &Addr) -> StdResult<()> {
+    if config_admin != account {
+        return Err(StdError::generic_err(
+            "This is an admin command. Admin commands can only be run from readonly admin address"
+                .to_string()
+                + config_admin.as_str(),
         ));
     }
 
@@ -1026,7 +1031,7 @@ mod tests {
     use serde::Deserialize;
 
     use crate::msg::ResponseStatus;
-    use crate::msg::{InitConfig, WalletBalances};
+    use crate::msg::WalletBalances;
     use crate::storage::claim::Claim as ClaimAmount;
     use crate::storage::expiration::Duration;
     use crate::viewing_key_obj::ViewingKeyObj;
@@ -1045,19 +1050,14 @@ mod tests {
     ) {
         let mut deps = mock_dependencies_with_balance(&[]);
         let env = mock_env();
-        let info = mock_info("instantiator", &[]);
-        let init_config: InitConfig = from_binary(&Binary::from(
-            r#"{ "unbonding_period": {"time": 60}, "min_stake_amount": "1000"}"#.as_bytes(),
-        ))
-        .unwrap();
+        let info = mock_info("admin", &[]);
         let init_msg = InstantiateMsg {
             name: "sibex".to_string(),
-            admin: Some(Addr::unchecked("admin".to_string())),
+            readonly_admin: Addr::unchecked("admin_readonly".to_string()),
             symbol: "IBEX".to_string(),
-            decimals: 0,
-            initial_balances: Some(initial_balances),
+            initial_balances,
+            ibex_source_wallet: Addr::unchecked("ibex_source_wallet".to_string()),
             prng_seed: Binary::from("lolz fun yay".as_bytes()),
-            config: Some(init_config),
         };
 
         (instantiate(deps.as_mut(), env, info, init_msg), deps)
@@ -1065,8 +1065,6 @@ mod tests {
 
     fn init_helper_with_config(
         initial_balances: Vec<WalletBalances>,
-        min_stake_amount: Uint128,
-        unbonding_period: Duration,
         contract_bal: u128,
     ) -> (
         StdResult<Response>,
@@ -1078,23 +1076,15 @@ mod tests {
         }]);
 
         let env = mock_env();
-        let info = mock_info("instantiator", &[]);
-
-        let init = format!(
-            "{{\"min_stake_amount\":\"{}\",
-                \"unbonding_period\":{{{}}}}}",
-            min_stake_amount, unbonding_period
-        );
-        let init_config: InitConfig = from_binary(&Binary::from(init.as_bytes())).unwrap();
+        let info = mock_info("admin", &[]);
 
         let init_msg = InstantiateMsg {
             name: "sibex".to_string(),
-            admin: Some(Addr::unchecked("admin".to_string())),
+            readonly_admin: Addr::unchecked("admin_readonly".to_string()),
             symbol: "IBEX".to_string(),
-            decimals: 8,
-            initial_balances: Some(initial_balances),
+            initial_balances,
+            ibex_source_wallet: Addr::unchecked("ibex_source_wallet".to_string()),
             prng_seed: Binary::from("lolz fun yay".as_bytes()),
-            config: Some(init_config),
         };
 
         (instantiate(deps.as_mut(), env, info, init_msg), deps)
@@ -1104,7 +1094,7 @@ mod tests {
         total_amount: u128,
     ) -> (Vec<u8>, OwnedDeps<MockStorage, MockApi, MockQuerier>) {
         let (init_result, deps) = init_helper(vec![WalletBalances {
-            address: "admin".to_string(),
+            address: "ibex_source_wallet".to_string(),
             unstaked: total_amount,
             staked: 0,
         }]);
@@ -1132,7 +1122,7 @@ mod tests {
         total_amount: u128,
     ) -> (MultipleData, OwnedDeps<MockStorage, MockApi, MockQuerier>) {
         let (_init_result, mut deps) = init_helper(vec![WalletBalances {
-            address: "admin".to_string(),
+            address: "ibex_source_wallet".to_string(),
             unstaked: total_amount,
             staked: 0,
         }]);
@@ -1238,7 +1228,6 @@ mod tests {
         assert_eq!(constants.name, "sibex".to_string());
         assert_eq!(constants.admin, Addr::unchecked("admin".to_string()));
         assert_eq!(constants.symbol, "IBEX".to_string());
-        assert_eq!(constants.decimals, 0);
 
         ViewingKey::set(deps.as_mut().storage, "lebron", "lolz fun yay");
         let is_vk_correct = ViewingKey::check(&deps.storage, "lebron", "lolz fun yay");
@@ -1257,8 +1246,6 @@ mod tests {
                 unstaked: 5000u128,
                 staked: 15000u128,
             }],
-            Uint128::new(100),
-            Duration::Time(60),
             0,
         );
         assert_eq!(init_result.unwrap(), Response::default());
@@ -1272,7 +1259,6 @@ mod tests {
         assert_eq!(constants.name, "sibex".to_string());
         assert_eq!(constants.admin, Addr::unchecked("admin".to_string()));
         assert_eq!(constants.symbol, "IBEX".to_string());
-        assert_eq!(constants.decimals, 8);
 
         ViewingKey::set(deps.as_mut().storage, "lebron", "lolz fun yay");
         let is_vk_correct = ViewingKey::check(&deps.storage, "lebron", "lolz fun yay");
@@ -1563,8 +1549,6 @@ mod tests {
                 unstaked: 5000u128,
                 staked: 15000u128,
             }],
-            Uint128::new(100),
-            Duration::Time(60),
             0,
         );
         assert!(
@@ -1579,8 +1563,6 @@ mod tests {
                 unstaked: 0,
                 staked: 0,
             }],
-            Uint128::new(100),
-            Duration::Time(60),
             0,
         );
         assert!(
@@ -1639,8 +1621,6 @@ mod tests {
                 unstaked: 5000u128,
                 staked: 0,
             }],
-            Uint128::new(100),
-            Duration::Time(60),
             0,
         );
         assert!(
@@ -1756,8 +1736,6 @@ mod tests {
                 unstaked: 5000u128,
                 staked: 15000u128,
             }],
-            Uint128::new(100),
-            Duration::Time(60),
             0,
         );
         assert!(
@@ -1792,8 +1770,6 @@ mod tests {
                 unstaked: 5000u128,
                 staked: 15000u128,
             }],
-            Uint128::new(100),
-            Duration::Time(60),
             0,
         );
         assert!(
@@ -1829,8 +1805,6 @@ mod tests {
                 unstaked: 5000u128,
                 staked: 15000u128,
             }],
-            Uint128::new(100),
-            Duration::Time(60),
             20000,
         );
         assert!(
@@ -2046,11 +2020,11 @@ mod tests {
         let query_answer: QueryAnswer = from_binary(&query_result.unwrap()).unwrap();
         match query_answer {
             QueryAnswer::TokenConfig {
-                min_stake_amount,
+                decimals,
                 unbonding_period,
             } => {
-                assert_eq!(unbonding_period, Duration::Time(60));
-                assert_eq!(min_stake_amount, Uint128::new(1000));
+                assert_eq!(unbonding_period, WEEK);
+                assert_eq!(decimals, 0u8);
             }
             _ => panic!("unexpected"),
         }
@@ -2228,8 +2202,6 @@ mod tests {
                 unstaked: 10000u128,
                 staked: 15000u128,
             }],
-            Uint128::new(100),
-            Duration::Time(60),
             1000,
         );
         assert!(
@@ -2458,7 +2430,7 @@ mod tests {
                 start,
                 merkle_root: "634de21cde1044f41d90373733b0f0fb1c1c71f9652b905cdf159e73c4cf0d37"
                     .to_string(),
-                wallet_holding_ibex: "admin".to_string()
+                ibex_source_wallet: "ibex_source_wallet".to_string()
             })
             .unwrap(),
         );
@@ -2563,8 +2535,10 @@ mod tests {
         assert_eq!(test_data.amount.u128(), claimed_amount);
 
         // contract address has less
-        let contract_balance =
-            BalancesStore::load(&deps.storage, &Addr::unchecked("admin".to_string()));
+        let contract_balance = BalancesStore::load(
+            &deps.storage,
+            &Addr::unchecked("ibex_source_wallet".to_string()),
+        );
         assert_eq!(4900u128, contract_balance);
 
         let msg = ExecuteMsg::ClaimAirdrop {
@@ -2676,11 +2650,11 @@ mod tests {
         let query_result = execute(deps.as_mut(), mock_env(), info.clone(), claimed_msg.clone());
         let error = extract_error_msg(query_result);
         assert!(error.contains(
-            "This is an admin command. Admin commands can only be run from admin address"
+            "This is an admin command. Admin commands can only be run from readonly admin address"
         ));
 
-        // when admin
-        let info = mock_info("admin", &[]);
+        // when admin_readonly
+        let info = mock_info("admin_readonly", &[]);
         let query_response =
             execute(deps.as_mut(), mock_env(), info.clone(), claimed_msg.clone()).unwrap();
         let claimed_balances = match from_binary(&query_response.data.unwrap()).unwrap() {
@@ -2993,7 +2967,7 @@ mod tests {
                 expiration,
                 start,
                 merkle_root: test_data.root.clone(),
-                wallet_holding_ibex: "admin".to_string()
+                ibex_source_wallet: "ibex_source_wallet".to_string()
             })
             .unwrap(),
         );
@@ -3010,22 +2984,23 @@ mod tests {
             stage: 1u8,
         };
         let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
-        let (stage, exp, st, root, wallet) = match from_binary(&res.data.unwrap()).unwrap() {
-            ExecuteAnswer::RegisterMerkleRoot {
-                stage,
-                expiration,
-                start,
-                merkle_root,
-                wallet_holding_ibex,
-            } => (stage, expiration, start, merkle_root, wallet_holding_ibex),
-            _ => panic!("Unexpected result from handle"),
-        };
+        let (stage, exp, st, root, ibex_source_wallet) =
+            match from_binary(&res.data.unwrap()).unwrap() {
+                ExecuteAnswer::RegisterMerkleRoot {
+                    stage,
+                    expiration,
+                    start,
+                    merkle_root,
+                    ibex_source_wallet,
+                } => (stage, expiration, start, merkle_root, ibex_source_wallet),
+                _ => panic!("Unexpected result from handle"),
+            };
 
         assert_eq!(1, stage);
         assert_eq!(expiration, exp);
         assert_eq!(start, st);
         assert_eq!(test_data.root, root);
-        assert_eq!("admin", wallet);
+        assert_eq!("ibex_source_wallet", ibex_source_wallet);
     }
 
     #[test]
@@ -3071,11 +3046,11 @@ mod tests {
         let query_result = execute(deps.as_mut(), mock_env(), info, execute_msg.clone());
         let error = extract_error_msg(query_result);
         assert!(error.contains(
-            "This is an admin command. Admin commands can only be run from admin address"
+            "This is an admin command. Admin commands can only be run from readonly admin address"
         ));
 
         // when admin
-        let info = mock_info("admin", &[]);
+        let info = mock_info("admin_readonly", &[]);
         let res = execute(deps.as_mut(), mock_env(), info, execute_msg).unwrap();
         let result = match from_binary(&res.data.unwrap()).unwrap() {
             ExecuteAnswer::GetAll { result } => (result),

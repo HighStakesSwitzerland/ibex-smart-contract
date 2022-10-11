@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use cosmwasm_std::{Addr, StdError, StdResult, Storage, Uint128};
+use cosmwasm_std::{Addr, StdError, StdResult, Storage};
 use schemars::JsonSchema;
 use secret_toolkit::serialization::Json;
 use secret_toolkit::storage::{Item, Keymap};
@@ -48,16 +48,14 @@ pub static STAGE_TOTAL_AMOUNT_CLAIMED: Keymap<u8, u128> =
 pub struct Constants {
     pub name: String,
     pub admin: Addr,
+    pub readonly_admin: Addr,
     pub symbol: String,
-    pub decimals: u8,
-    // minimal amount to stake
-    pub min_stake_amount: Uint128,
     // unbonding period before being able to storage tokens
     pub unbonding_period: Duration,
-
     // the address of this contract, used to validate query permits
     pub contract_address: Addr,
-    pub ibex_wallet: Addr,
+    // wallet that contains ibex token for airdrops to be taken from on claim
+    pub ibex_source_wallet: Addr,
 }
 
 impl Constants {

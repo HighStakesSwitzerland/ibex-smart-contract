@@ -9,24 +9,26 @@ At the time of token creation you may configure:
 
 ### To create a new token (admin):
 
-```secretcli tx compute instantiate <contract_number> --from a --label IBEX '{"name": "sibex", "symbol": "IBEX", "label": "IBEX", "decimals": 0, "admin": <admin_wallet>, "initial_balances": [{"address": "secret1ap26qrlp8mcq2pg6r47w43l0y8zkqm8a450s03", "unstaked": "100000", "staked": "100"}], "prng_seed": "dG90b2xhcHJhbGluZQo=", "config": { "unbonding_period": {"time": 60}, "min_stake_amount": "1000"}}'```
+```secretcli tx compute instantiate <contract_number> --from a --label IBEX '{"name": "sibex", "symbol": "IBEX", "label": "IBEX", "readonly_admin": <admin_wallet_for_getAll_commands>, "ibex_source_wallet": <wallet_that_holds_ibex_for_aidrops>, "initial_balances": [{"address": "secret1ap26qrlp8mcq2pg6r47w43l0y8zkqm8a450s03", "unstaked": "100000000", "staked": "0"}], "prng_seed": "dG90b2xhcHJhbGluZQo="}'```
+
+`readonly_admin`: A wallet that will be authorized to call the endpoint `get_all` (get all client ibex balances) and `get_all_claimed` (get all claimed info on client wallets)
+`ibex_source_wallet`: Wallet that must contain ibex to be claimed for airdrops. If not enough balance it will fail
+`initial_balances`: Must contain at least the initial wallet with the total IBEX to create. And you can specify as many addresses/balances as you like.
 `prng_seed` is a random string base64 encoded used as salt
-`unbonding_period` is in seconds (604800 for 1 week)
-The `admin` field is optional and will default to the "--from" address if you do not specify it.
-The `initial_balances` field is optional, and you can specify as many addresses/balances as you like.  The `config` field as well as every field in the `config` is optional.
 
 # Public tx
 
-### To get the token info/config:
+### To get the token info:
 
 `secretcli q compute query <contract-address> '{"token_info": {}}'`
 
-Response: `{"token_info":{"name":"sibex","symbol":"IBEX","decimals":0,"total_supply":"1000000"}}`
+Response: `{"token_info":{"name":"sibex","symbol":"IBEX","total_supply":"1000000"}}`
 
+### To view the token contract's configuration:
 
 `secretcli q compute query <contract-address> '{"token_config": {}}'`
 
-Response: `{"token_config":{"min_stake_amount":"100","unbonding_period":{"time":60}}}`
+Response: `{"token_config":{"decimals":"0","unbonding_period":{"time":360000}}}`
 
 ### To set your viewing key (used in queries):
 
@@ -34,7 +36,7 @@ Response: `{"token_config":{"min_stake_amount":"100","unbonding_period":{"time":
 
 ### To check your balance:
 
-```secretcli q compute query <contract-address> '{"balance": {"address":"<your_address>", "key":"your_viewing_key"}}'```
+```secretcli q compute query secret1gpp4ftmjq4xra86mf4wled3luathj68juvq8cd '{"balance": {"address":"secret17nch7xxw2zkgk7py7hsh579ddwzzl7pr8xlzhr", "key":"your_viewing_key"}}'```
 
 ### To view your transaction history:
 
@@ -80,10 +82,6 @@ Returns
 ### To claim a weekly airdrop:
 
 ```secretcli tx compute execute <contract-address> '{"claim_airdrop": { stage: <stage_number>, amount: <amount_to_claim>, proof: <merkle_proof_generated_in_js>}' --from <account> --gas 1000000```
-
-### To view the token contract's configuration:
-
-```secretcli q compute query <contract-address> '{"token_config": {}}'```
 
 # Admin tx
 
@@ -140,21 +138,23 @@ Actually doable using replace_merkle_root, I have wasted my time
 
 ### To withdraw all unclaimed IBEX after expiration of airdrop
 
-Works only if stage expiration date is expired. Sends all IBEX unclaimed to the specified address
+Works only if stage expiration date is expired. Sends all unclaimed IBEX for the airdrop stage to the specified address.
 
-```secretcli tx compute execute <contract-address> '{"withdraw_unclaimed": {"stage": <number>, "address": <address_to_send_IBEX>}' --from <admin_account> --gas 1000000'```
+```secretcli tx compute execute <contract-address> '{"withdraw_unclaimed": {"stage": <number>, "address": <address_to_send_unclaimed_ibex>}' --from <admin_account> --gas 1000000'```
 
 ### To get the list of all IBEX balances
 
-```secretcli tx compute execute <contract-address> '{"get_all":{}}'  --from <admin_account> --gas 1000000'```
+```secretcli tx compute execute <contract-address> '{"get_all":{}}'  --from <readonly_admin_account> --gas 1000000'```
 
 Returns the list of all wallet + amount_staked + amount_unstaked
+Must be call with the wallet `--from` corresponding to the wallet registered as `readonly_admin_account`
 
 ### To get the list of all Claimed airdrops
 
-```secretcli tx compute execute <contract-address> '{"get_all_claimed":{}}'  --from <admin_account> --gas 1000000'```
+```secretcli tx compute execute <contract-address> '{"get_all_claimed":{}}'  --from <readonly_admin_account> --gas 1000000'```
 
-Returns the list of all wallet + airdrop_stage + claimed_amount (random order)
+Returns the list of all wallet + airdrop_stage + claimed_amount (random order?)
+Must be call with the wallet `--from` corresponding to the wallet registered as `readonly_admin_account`
 
 No wallet = not claimed !
 

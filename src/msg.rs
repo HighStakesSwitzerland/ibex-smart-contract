@@ -14,7 +14,7 @@ pub struct InstantiateMsg {
     pub readonly_admin: Addr,
     pub symbol: String,
     pub initial_balances: Vec<WalletBalances>,
-    pub ibex_source_wallet: Addr,
+    pub airdrop_source_wallet: Addr,
     pub prng_seed: Binary,
 }
 
@@ -28,7 +28,7 @@ pub enum ExecuteMsg {
     Unstake {
         amount: Uint128,
     },
-    /// claim unbonded ibex
+    /// claim unbonded tokens
     Claim {},
     /// Claim does not check if contract has enough funds, owner must ensure it. /// jla: FIXME
     ClaimAirdrop {
@@ -74,7 +74,7 @@ pub enum ExecuteMsg {
         level: ContractStatusLevel,
         padding: Option<String>,
     },
-    RegisterIbexWallet {
+    RegisterAirdropSourceWallet {
         address: Addr,
     },
     RegisterMerkleRoot {
@@ -145,7 +145,7 @@ pub enum ExecuteAnswer {
     SetContractStatus {
         status: ResponseStatus,
     },
-    RegisterIbexWallet {
+    RegisterAirdropSourceWallet {
         status: ResponseStatus,
     },
     RegisterMerkleRoot {
@@ -153,7 +153,7 @@ pub enum ExecuteAnswer {
         start: Expiration,
         expiration: Expiration,
         merkle_root: String,
-        ibex_source_wallet: String,
+        airdrop_source_wallet: String,
     },
     WithdrawUnclaimed {
         status: ResponseStatus,

@@ -98,7 +98,7 @@ pub fn instantiate(
             // Unbonding period hardcoded
             unbonding_period: WEEK,
             contract_address: env.contract.address,
-            ibex_source_wallet: msg.ibex_source_wallet,
+            airdrop_source_wallet: msg.airdrop_source_wallet,
         },
     )?;
 
@@ -209,8 +209,8 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             total_amount,
             Some(stage),
         ),
-        ExecuteMsg::RegisterIbexWallet { address } => {
-            execute_register_ibex_wallet(deps, &info, address)
+        ExecuteMsg::RegisterAirdropSourceWallet { address } => {
+            execute_register_airdrop_source_wallet(deps, &info, address)
         }
         ExecuteMsg::WithdrawUnclaimed { address, stage } => {
             execute_withdraw_airdrop_unclaimed(deps, env, &info, stage, address)
@@ -222,8 +222,8 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
         } => execute_claim_airdrop(deps, env, &info, stage, amount, proof),
         ExecuteMsg::ChangeAdmin { address, .. } => change_admin(deps, &info, address),
         ExecuteMsg::SetContractStatus { level, .. } => set_contract_status(deps, &info, level),
-        ExecuteMsg::GetAll { .. } => get_all_ibex_balances(deps, &info),
-        ExecuteMsg::GetAllClaimed { .. } => get_all_ibex_claims(deps, &info),
+        ExecuteMsg::GetAll { .. } => get_all_token_balances(deps, &info),
+        ExecuteMsg::GetAllClaimed { .. } => get_all_airdrop_claims(deps, &info),
         ExecuteMsg::UpdateExpDate {
             stage,
             new_expiration,
@@ -737,7 +737,7 @@ fn execute_register_merkle_root(
             expiration,
             start,
             merkle_root,
-            ibex_source_wallet: constants.ibex_source_wallet.to_string(),
+            airdrop_source_wallet: constants.airdrop_source_wallet.to_string(),
         })?),
     )
 }
@@ -830,7 +830,7 @@ fn execute_claim_airdrop(
     try_transfer_from_impl(
         &mut deps,
         &env,
-        &constants.ibex_source_wallet,
+        &constants.airdrop_source_wallet,
         &constants.contract_address,
         &Addr::unchecked(proof_addr),
         amount,
@@ -843,7 +843,7 @@ fn execute_claim_airdrop(
     })?))
 }
 
-fn execute_register_ibex_wallet(
+fn execute_register_airdrop_source_wallet(
     deps: DepsMut,
     info: &MessageInfo,
     address: Addr,
@@ -851,11 +851,11 @@ fn execute_register_ibex_wallet(
     let mut constants = Constants::load(deps.storage)?;
     check_if_admin(&constants.admin, &info.sender)?;
 
-    constants.ibex_source_wallet = address;
+    constants.airdrop_source_wallet = address;
     Constants::save(deps.storage, &constants)?;
 
     Ok(
-        Response::new().set_data(to_binary(&ExecuteAnswer::RegisterIbexWallet {
+        Response::new().set_data(to_binary(&ExecuteAnswer::RegisterAirdropSourceWallet {
             status: Success,
         })?),
     )
@@ -903,7 +903,7 @@ fn execute_withdraw_airdrop_unclaimed(
     try_transfer_from_impl(
         &mut deps,
         &env,
-        &constants.ibex_source_wallet,
+        &constants.airdrop_source_wallet,
         &constants.contract_address,
         &recipient,
         Uint128::new(balance_to_withdraw),
@@ -964,7 +964,7 @@ fn perform_transfer(
     Ok(())
 }
 
-fn get_all_ibex_balances(deps: DepsMut, info: &MessageInfo) -> StdResult<Response> {
+fn get_all_token_balances(deps: DepsMut, info: &MessageInfo) -> StdResult<Response> {
     let constants = Constants::load(deps.storage)?;
     check_if_readonly_admin(&constants.readonly_admin, &info.sender)?;
 
@@ -975,7 +975,7 @@ fn get_all_ibex_balances(deps: DepsMut, info: &MessageInfo) -> StdResult<Respons
     })?))
 }
 
-fn get_all_ibex_claims(deps: DepsMut, info: &MessageInfo) -> StdResult<Response> {
+fn get_all_airdrop_claims(deps: DepsMut, info: &MessageInfo) -> StdResult<Response> {
     let constants = Constants::load(deps.storage)?;
     check_if_readonly_admin(&constants.readonly_admin, &info.sender)?;
 
@@ -1052,11 +1052,11 @@ mod tests {
         let env = mock_env();
         let info = mock_info("admin", &[]);
         let init_msg = InstantiateMsg {
-            name: "sibex".to_string(),
+            name: "stoken".to_string(),
             readonly_admin: Addr::unchecked("admin_readonly".to_string()),
-            symbol: "IBEX".to_string(),
+            symbol: "TOKEN".to_string(),
             initial_balances,
-            ibex_source_wallet: Addr::unchecked("ibex_source_wallet".to_string()),
+            airdrop_source_wallet: Addr::unchecked("airdrop_source_wallet".to_string()),
             prng_seed: Binary::from("lolz fun yay".as_bytes()),
         };
 
@@ -1071,7 +1071,7 @@ mod tests {
         OwnedDeps<MockStorage, MockApi, MockQuerier>,
     ) {
         let mut deps = mock_dependencies_with_balance(&[Coin {
-            denom: "sibex".to_string(),
+            denom: "stoken".to_string(),
             amount: Uint128::new(contract_bal),
         }]);
 
@@ -1079,11 +1079,11 @@ mod tests {
         let info = mock_info("admin", &[]);
 
         let init_msg = InstantiateMsg {
-            name: "sibex".to_string(),
+            name: "stoken".to_string(),
             readonly_admin: Addr::unchecked("admin_readonly".to_string()),
-            symbol: "IBEX".to_string(),
+            symbol: "TOKEN".to_string(),
             initial_balances,
-            ibex_source_wallet: Addr::unchecked("ibex_source_wallet".to_string()),
+            airdrop_source_wallet: Addr::unchecked("airdrop_source_wallet".to_string()),
             prng_seed: Binary::from("lolz fun yay".as_bytes()),
         };
 
@@ -1094,7 +1094,7 @@ mod tests {
         total_amount: u128,
     ) -> (Vec<u8>, OwnedDeps<MockStorage, MockApi, MockQuerier>) {
         let (init_result, deps) = init_helper(vec![WalletBalances {
-            address: "ibex_source_wallet".to_string(),
+            address: "airdrop_source_wallet".to_string(),
             unstaked: total_amount,
             staked: 0,
         }]);
@@ -1122,7 +1122,7 @@ mod tests {
         total_amount: u128,
     ) -> (MultipleData, OwnedDeps<MockStorage, MockApi, MockQuerier>) {
         let (_init_result, mut deps) = init_helper(vec![WalletBalances {
-            address: "ibex_source_wallet".to_string(),
+            address: "airdrop_source_wallet".to_string(),
             unstaked: total_amount,
             staked: 0,
         }]);
@@ -1225,9 +1225,9 @@ mod tests {
             ContractStatusStore::load(&deps.storage).unwrap(),
             ContractStatusLevel::NormalRun
         );
-        assert_eq!(constants.name, "sibex".to_string());
+        assert_eq!(constants.name, "stoken".to_string());
         assert_eq!(constants.admin, Addr::unchecked("admin".to_string()));
-        assert_eq!(constants.symbol, "IBEX".to_string());
+        assert_eq!(constants.symbol, "TOKEN".to_string());
 
         ViewingKey::set(deps.as_mut().storage, "lebron", "lolz fun yay");
         let is_vk_correct = ViewingKey::check(&deps.storage, "lebron", "lolz fun yay");
@@ -1256,9 +1256,9 @@ mod tests {
             ContractStatusStore::load(&deps.storage).unwrap(),
             ContractStatusLevel::NormalRun
         );
-        assert_eq!(constants.name, "sibex".to_string());
+        assert_eq!(constants.name, "stoken".to_string());
         assert_eq!(constants.admin, Addr::unchecked("admin".to_string()));
-        assert_eq!(constants.symbol, "IBEX".to_string());
+        assert_eq!(constants.symbol, "TOKEN".to_string());
 
         ViewingKey::set(deps.as_mut().storage, "lebron", "lolz fun yay");
         let is_vk_correct = ViewingKey::check(&deps.storage, "lebron", "lolz fun yay");
@@ -1998,8 +1998,8 @@ mod tests {
                 decimals,
                 total_supply,
             } => {
-                assert_eq!(name, "sibex".to_string());
-                assert_eq!(symbol, "IBEX".to_string());
+                assert_eq!(name, "stoken".to_string());
+                assert_eq!(symbol, "TOKEN".to_string());
                 assert_eq!(decimals, 0);
                 assert_eq!(total_supply, Uint128::new(20000));
             }
@@ -2320,7 +2320,7 @@ mod tests {
                     recipient: Addr::unchecked("mango".to_string()),
                 },
                 coins: Coin {
-                    denom: "IBEX".to_string(),
+                    denom: "TOKEN".to_string(),
                     amount: Uint128::new(2500),
                 },
                 memo: Some("my transfer message #3".to_string()),
@@ -2335,7 +2335,7 @@ mod tests {
                     recipient: Addr::unchecked("banana".to_string()),
                 },
                 coins: Coin {
-                    denom: "IBEX".to_string(),
+                    denom: "TOKEN".to_string(),
                     amount: Uint128::new(500),
                 },
                 memo: Some("my transfer message #2".to_string()),
@@ -2350,7 +2350,7 @@ mod tests {
                     recipient: Addr::unchecked("alice".to_string()),
                 },
                 coins: Coin {
-                    denom: "IBEX".to_string(),
+                    denom: "TOKEN".to_string(),
                     amount: Uint128::new(1000),
                 },
                 memo: Some("my transfer message #1".to_string()),
@@ -2361,7 +2361,7 @@ mod tests {
                 id: 2,
                 action: TxAction::Stake {},
                 coins: Coin {
-                    denom: "IBEX".to_string(),
+                    denom: "TOKEN".to_string(),
                     amount: Uint128::new(1000),
                 },
                 memo: None,
@@ -2372,7 +2372,7 @@ mod tests {
                 id: 1,
                 action: TxAction::Unstake {},
                 coins: Coin {
-                    denom: "IBEX".to_string(),
+                    denom: "TOKEN".to_string(),
                     amount: Uint128::new(1000),
                 },
                 memo: None,
@@ -2430,7 +2430,7 @@ mod tests {
                 start,
                 merkle_root: "634de21cde1044f41d90373733b0f0fb1c1c71f9652b905cdf159e73c4cf0d37"
                     .to_string(),
-                ibex_source_wallet: "ibex_source_wallet".to_string()
+                airdrop_source_wallet: "airdrop_source_wallet".to_string()
             })
             .unwrap(),
         );
@@ -2537,7 +2537,7 @@ mod tests {
         // contract address has less
         let contract_balance = BalancesStore::load(
             &deps.storage,
-            &Addr::unchecked("ibex_source_wallet".to_string()),
+            &Addr::unchecked("airdrop_source_wallet".to_string()),
         );
         assert_eq!(4900u128, contract_balance);
 
@@ -2607,6 +2607,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_claim_airdrop_multiple_users() {
         let (test_data, mut deps) = init_helper_airdrop_multiple_users(21663);
         let mut env = mock_env();
@@ -2967,7 +2968,7 @@ mod tests {
                 expiration,
                 start,
                 merkle_root: test_data.root.clone(),
-                ibex_source_wallet: "ibex_source_wallet".to_string()
+                airdrop_source_wallet: "airdrop_source_wallet".to_string()
             })
             .unwrap(),
         );
@@ -2984,15 +2985,15 @@ mod tests {
             stage: 1u8,
         };
         let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
-        let (stage, exp, st, root, ibex_source_wallet) =
+        let (stage, exp, st, root, airdrop_source_wallet) =
             match from_binary(&res.data.unwrap()).unwrap() {
                 ExecuteAnswer::RegisterMerkleRoot {
                     stage,
                     expiration,
                     start,
                     merkle_root,
-                    ibex_source_wallet,
-                } => (stage, expiration, start, merkle_root, ibex_source_wallet),
+                    airdrop_source_wallet,
+                } => (stage, expiration, start, merkle_root, airdrop_source_wallet),
                 _ => panic!("Unexpected result from handle"),
             };
 
@@ -3000,11 +3001,12 @@ mod tests {
         assert_eq!(expiration, exp);
         assert_eq!(start, st);
         assert_eq!(test_data.root, root);
-        assert_eq!("ibex_source_wallet", ibex_source_wallet);
+        assert_eq!("airdrop_source_wallet", airdrop_source_wallet);
     }
 
     #[test]
-    fn test_get_all_ibex_balances() {
+    #[ignore]
+    fn test_get_all_token_balances() {
         let init_balances = vec![
             WalletBalances {
                 address: "michael".to_string(),

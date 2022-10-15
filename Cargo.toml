@@ -1,5 +1,5 @@
 [package]
-name = "ibex-smart-contract"
+name = "high-stakes-smart-contract"
 version = "1.0.0"
 authors = ["Joe <joe@highstakes.ch>"]
 edition = "2021"

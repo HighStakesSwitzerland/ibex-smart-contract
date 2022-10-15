@@ -54,8 +54,8 @@ pub struct Constants {
     pub unbonding_period: Duration,
     // the address of this contract, used to validate query permits
     pub contract_address: Addr,
-    // wallet that contains ibex token for airdrops to be taken from on claim
-    pub ibex_source_wallet: Addr,
+    // wallet that contains tokens for airdrops to be taken from on claim
+    pub airdrop_source_wallet: Addr,
 }
 
 impl Constants {
